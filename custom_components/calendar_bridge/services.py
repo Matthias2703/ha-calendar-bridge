@@ -41,7 +41,7 @@ from .const import (
 )
 from .device import async_find_default_device, async_resolve_device
 from .reminder_scheduler import ReminderScheduler
-from .target import EventSpec, ReminderSpec
+from .target import CalendarNotFoundError, EventSpec, ReminderSpec
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -152,7 +152,14 @@ async def async_handle_create_event(hass: HomeAssistant, call: ServiceCall) -> S
         event_spec = dataclasses.replace(base_spec, reminders=reminders)
 
         target = entry.runtime_data
-        uid = await target.async_create_event(subentry.data[CONF_CALENDAR_URL], event_spec)
+        try:
+            uid = await target.async_create_event(subentry.data[CONF_CALENDAR_URL], event_spec)
+        except CalendarNotFoundError as err:
+            raise ServiceValidationError(
+                translation_domain=DOMAIN,
+                translation_key="calendar_not_found",
+                translation_placeholders={"device_id": device_id},
+            ) from err
         created[device_id] = uid
 
         if ATTR_NOTIFY in call.data:

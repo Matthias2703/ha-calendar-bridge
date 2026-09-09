@@ -104,6 +104,9 @@
     },
     "no_target": {
       "message": "Es wurde kein Ziel-Kalender angegeben und kein Standard-Ziel konfiguriert. Gib ein Gerät an oder markiere einen Kalender als Standard-Ziel."
+    },
+    "calendar_not_found": {
+      "message": "Der Kalender für Gerät {device_id} wurde auf dem Server nicht mehr gefunden. Er wurde möglicherweise umbenannt oder gelöscht."
     }
   },
   "services": {
@@ -141,7 +144,7 @@
         },
         "reminders": {
           "name": "Erinnerungen",
-          "description": "Liste von bis zu 5 Erinnerungen, je {method: popup|email, minutes_before: Minuten}."
+          "description": "Bis zu 5 Erinnerungen. Jeder Eintrag braucht eine Methode (popup oder email) und minutes_before."
         },
         "rrule": {
           "name": "Wiederholungsregel",
@@ -149,7 +152,7 @@
         },
         "notify": {
           "name": "Benachrichtigungs-Erinnerung",
-          "description": "Zusätzlich eine Home-Assistant-Benachrichtigung vor dem Termin senden, unabhängig von der Kalender-eigenen Erinnerung: {target: Notify-Entity, minutes_before: Minuten, message: optionaler Text}."
+          "description": "Zusätzlich eine Home-Assistant-Benachrichtigung vor dem Termin senden, unabhängig von der Kalender-eigenen Erinnerung. Braucht ein Notify-Ziel und minutes_before; message ist optional."
         }
       }
     }

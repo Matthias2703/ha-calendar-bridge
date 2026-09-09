@@ -6,7 +6,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_PASSWORD, CONF_URL, CONF_USERNAME, CONF_VERIFY_SSL
 from homeassistant.core import HomeAssistant, ServiceCall, ServiceResponse, SupportsResponse
 
-from .caldav_target import CalDavCalendarTarget, build_client
+from .caldav_target import CalDavCalendarTarget
 from .const import CONF_DISPLAY_NAME, DOMAIN, SERVICE_CREATE_EVENT
 from .device import async_create_or_update_device
 from .reminder_scheduler import ReminderScheduler
@@ -38,13 +38,14 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
 
 async def async_setup_entry(hass: HomeAssistant, entry: CalendarBridgeConfigEntry) -> bool:
     """Set up a Calendar Bridge account (CalDAV for now) from a config entry."""
-    client = build_client(
+    entry.runtime_data = CalDavCalendarTarget(
+        hass,
         entry.data[CONF_URL],
         entry.data[CONF_USERNAME],
         entry.data[CONF_PASSWORD],
         entry.data[CONF_VERIFY_SSL],
+        entry.data[CONF_USERNAME],
     )
-    entry.runtime_data = CalDavCalendarTarget(hass, client, entry.data[CONF_USERNAME])
 
     for subentry_id, subentry in entry.subentries.items():
         async_create_or_update_device(hass, entry, subentry_id, subentry.data[CONF_DISPLAY_NAME])

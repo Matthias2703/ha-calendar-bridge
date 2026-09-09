@@ -31,6 +31,10 @@ class EventSpec:
     rrule: str | None = None
 
 
+class CalendarNotFoundError(Exception):
+    """Raised when a previously-configured calendar can no longer be found."""
+
+
 class CalendarTarget(Protocol):
     """Interface every calendar backend (Google, CalDAV, ...) must implement."""
 

@@ -2,14 +2,15 @@
 
 from __future__ import annotations
 
+import uuid
 from datetime import UTC, datetime
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import icalendar
 import pytest
 
 from custom_components.calendar_bridge.caldav_target import CalDavCalendarTarget
-from custom_components.calendar_bridge.target import EventSpec, ReminderSpec
+from custom_components.calendar_bridge.target import CalendarNotFoundError, EventSpec, ReminderSpec
 
 
 class _FakeHass:
@@ -19,44 +20,119 @@ class _FakeHass:
         return func(*args)
 
 
-def _make_target(owner_email: str | None = None) -> tuple[CalDavCalendarTarget, MagicMock]:
-    client = MagicMock()
-    target = CalDavCalendarTarget(_FakeHass(), client, owner_email)
-    return target, client
+_ACCOUNT_URL = "https://caldav.icloud.com"
+
+
+def _make_target(owner_email: str | None = None) -> CalDavCalendarTarget:
+    return CalDavCalendarTarget(_FakeHass(), _ACCOUNT_URL, "matthias", "hunter2", True, owner_email)
+
+
+def _mock_client_with_calendar(calendar_ref: str) -> tuple[MagicMock, MagicMock]:
+    """A mock DAVClient whose principal().calendars() includes calendar_ref."""
+    mock_calendar = MagicMock()
+    mock_calendar.url = calendar_ref
+    mock_client = MagicMock()
+    mock_client.principal.return_value.calendars.return_value = [mock_calendar]
+    return mock_client, mock_calendar
+
+
+async def _create_event(
+    target: CalDavCalendarTarget, calendar_ref: str, spec: EventSpec
+) -> tuple[str, MagicMock]:
+    """Run async_create_event with build_client mocked, returning (uid, mock_calendar).
+
+    A client is (re)built per call and re-hydrated via principal().calendars()
+    -- see the docstring on CalDavCalendarTarget for why it doesn't just PUT
+    straight to a stored absolute calendar URL.
+    """
+    mock_client, mock_calendar = _mock_client_with_calendar(calendar_ref)
+    with patch(
+        "custom_components.calendar_bridge.caldav_target.build_client", return_value=mock_client
+    ):
+        uid = await target.async_create_event(calendar_ref, spec)
+    return uid, mock_calendar
 
 
 @pytest.mark.asyncio
-async def test_create_event_puts_ics_to_the_right_calendar():
-    target, client = _make_target()
+async def test_create_event_rediscovers_the_calendar_via_the_account_entry_point():
+    target = _make_target()
     spec = EventSpec(
         summary="Dentist",
         start=datetime(2026, 10, 1, 9, 0, tzinfo=UTC),
         end=datetime(2026, 10, 1, 9, 30, tzinfo=UTC),
     )
 
-    uid = await target.async_create_event("https://caldav.icloud.com/cal/", spec)
+    # iCloud (and other CalDAV providers) can redirect discovery to a
+    # different host than the account's entry-point URL -- reconnecting
+    # straight to that resolved host 404s, so every call re-does the same
+    # principal()/calendars() discovery against the original entry point.
+    calendar_ref = "https://p113-caldav.icloud.com/cal/"
+    mock_client, mock_calendar = _mock_client_with_calendar(calendar_ref)
+    with patch(
+        "custom_components.calendar_bridge.caldav_target.build_client", return_value=mock_client
+    ) as mock_build:
+        uid = await target.async_create_event(calendar_ref, spec)
+    mock_build.assert_called_once_with(_ACCOUNT_URL, "matthias", "hunter2", True)
 
-    client.calendar.assert_called_once_with(url="https://caldav.icloud.com/cal/")
-    saved_ics = client.calendar.return_value.save_event.call_args[0][0]
+    saved_ics = mock_calendar.save_event.call_args[0][0]
     cal = icalendar.Calendar.from_ical(saved_ics)
     event = next(iter(cal.walk("VEVENT")))
     assert str(event["uid"]) == uid
-    assert uid.endswith("@calendar-bridge")
+    # Plain UUID, no "@..." suffix -- an unescaped "@" in the UID becomes
+    # part of the PUT filename and iCloud's edge rejects that.
+    uuid.UUID(uid)
     assert str(event["summary"]) == "Dentist"
 
 
 @pytest.mark.asyncio
+async def test_naive_start_is_normalized_to_utc_not_left_floating():
+    # HA's cv.datetime returns a naive datetime when the service call's
+    # string has no UTC offset (e.g. "2026-10-01 09:00:00"). Serializing
+    # that as-is produces a "floating" DTSTART (no Z, no TZID), which
+    # iCloud's CalDAV edge rejects outright with a bare 404.
+    target = _make_target()
+    spec = EventSpec(
+        summary="Dentist",
+        start=datetime(2026, 10, 1, 9, 0),
+        end=datetime(2026, 10, 1, 9, 30),
+    )
+
+    _uid, mock_calendar = await _create_event(target, "https://example.test/cal/", spec)
+
+    ics = mock_calendar.save_event.call_args[0][0]
+    cal = icalendar.Calendar.from_ical(ics)
+    event = next(iter(cal.walk("VEVENT")))
+    assert event["dtstart"].dt.tzinfo is not None
+    assert event["dtend"].dt.tzinfo is not None
+
+
+@pytest.mark.asyncio
+async def test_missing_end_defaults_to_a_one_hour_dtend():
+    # RFC 5545 allows a VEVENT with no DTEND (zero-length), but iCloud's
+    # CalDAV write endpoint rejects such a PUT outright with a bare 404.
+    target = _make_target()
+    spec = EventSpec(summary="Plain", start=datetime(2026, 10, 1, 9, 0, tzinfo=UTC))
+
+    _uid, mock_calendar = await _create_event(target, "https://example.test/cal/", spec)
+
+    ics = mock_calendar.save_event.call_args[0][0]
+    cal = icalendar.Calendar.from_ical(ics)
+    event = next(iter(cal.walk("VEVENT")))
+    assert event["dtend"].dt == datetime(2026, 10, 1, 10, 0, tzinfo=UTC)
+
+
+@pytest.mark.asyncio
 async def test_popup_reminder_produces_display_alarm():
-    target, client = _make_target()
+    target = _make_target()
     spec = EventSpec(
         summary="Standup",
         start=datetime(2026, 10, 1, 9, 0, tzinfo=UTC),
         reminders=(ReminderSpec(minutes_before=30, method="popup"),),
     )
 
-    await target.async_create_event("https://example.test/cal/", spec)
+    _uid, mock_calendar = await _create_event(target, "https://example.test/cal/", spec)
 
-    ics = client.calendar.return_value.save_event.call_args[0][0]
+    ics = mock_calendar.save_event.call_args[0][0]
     cal = icalendar.Calendar.from_ical(ics)
     event = next(iter(cal.walk("VEVENT")))
     alarms = list(event.walk("VALARM"))
@@ -67,16 +143,16 @@ async def test_popup_reminder_produces_display_alarm():
 
 @pytest.mark.asyncio
 async def test_email_reminder_sets_attendee_to_owner_email():
-    target, client = _make_target(owner_email="matthias.vierling@gmail.com")
+    target = _make_target(owner_email="matthias.vierling@gmail.com")
     spec = EventSpec(
         summary="Standup",
         start=datetime(2026, 10, 1, 9, 0, tzinfo=UTC),
         reminders=(ReminderSpec(minutes_before=1440, method="email"),),
     )
 
-    await target.async_create_event("https://example.test/cal/", spec)
+    _uid, mock_calendar = await _create_event(target, "https://example.test/cal/", spec)
 
-    ics = client.calendar.return_value.save_event.call_args[0][0]
+    ics = mock_calendar.save_event.call_args[0][0]
     cal = icalendar.Calendar.from_ical(ics)
     event = next(iter(cal.walk("VEVENT")))
     alarm = next(iter(event.walk("VALARM")))
@@ -86,7 +162,7 @@ async def test_email_reminder_sets_attendee_to_owner_email():
 
 @pytest.mark.asyncio
 async def test_multiple_reminders_produce_multiple_alarms():
-    target, client = _make_target()
+    target = _make_target()
     spec = EventSpec(
         summary="Birthday",
         start=datetime(2026, 10, 1, 9, 0, tzinfo=UTC),
@@ -96,9 +172,9 @@ async def test_multiple_reminders_produce_multiple_alarms():
         ),
     )
 
-    await target.async_create_event("https://example.test/cal/", spec)
+    _uid, mock_calendar = await _create_event(target, "https://example.test/cal/", spec)
 
-    ics = client.calendar.return_value.save_event.call_args[0][0]
+    ics = mock_calendar.save_event.call_args[0][0]
     cal = icalendar.Calendar.from_ical(ics)
     event = next(iter(cal.walk("VEVENT")))
     triggers = sorted(a["trigger"].dt.total_seconds() for a in event.walk("VALARM"))
@@ -107,16 +183,16 @@ async def test_multiple_reminders_produce_multiple_alarms():
 
 @pytest.mark.asyncio
 async def test_rrule_is_included_when_set():
-    target, client = _make_target()
+    target = _make_target()
     spec = EventSpec(
         summary="Anniversary",
         start=datetime(2026, 10, 1, 9, 0, tzinfo=UTC),
         rrule="FREQ=YEARLY",
     )
 
-    await target.async_create_event("https://example.test/cal/", spec)
+    _uid, mock_calendar = await _create_event(target, "https://example.test/cal/", spec)
 
-    ics = client.calendar.return_value.save_event.call_args[0][0]
+    ics = mock_calendar.save_event.call_args[0][0]
     cal = icalendar.Calendar.from_ical(ics)
     event = next(iter(cal.walk("VEVENT")))
     assert "rrule" in event
@@ -125,12 +201,29 @@ async def test_rrule_is_included_when_set():
 
 @pytest.mark.asyncio
 async def test_no_reminders_means_no_valarm():
-    target, client = _make_target()
+    target = _make_target()
     spec = EventSpec(summary="Plain", start=datetime(2026, 10, 1, 9, 0, tzinfo=UTC))
 
-    await target.async_create_event("https://example.test/cal/", spec)
+    _uid, mock_calendar = await _create_event(target, "https://example.test/cal/", spec)
 
-    ics = client.calendar.return_value.save_event.call_args[0][0]
+    ics = mock_calendar.save_event.call_args[0][0]
     cal = icalendar.Calendar.from_ical(ics)
     event = next(iter(cal.walk("VEVENT")))
     assert list(event.walk("VALARM")) == []
+
+
+@pytest.mark.asyncio
+async def test_missing_calendar_raises_calendar_not_found():
+    target = _make_target()
+    spec = EventSpec(summary="Plain", start=datetime(2026, 10, 1, 9, 0, tzinfo=UTC))
+
+    mock_client = MagicMock()
+    mock_client.principal.return_value.calendars.return_value = []  # calendar is gone
+    with (
+        patch(
+            "custom_components.calendar_bridge.caldav_target.build_client",
+            return_value=mock_client,
+        ),
+        pytest.raises(CalendarNotFoundError),
+    ):
+        await target.async_create_event("https://example.test/cal/", spec)
