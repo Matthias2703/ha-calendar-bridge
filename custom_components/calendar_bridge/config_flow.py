@@ -380,7 +380,7 @@ class CalendarSubentryFlow(ConfigSubentryFlow):
         if user_input is not None:
             calendar_ref = user_input[CONF_CALENDAR_URL]
             display_name = choices[calendar_ref]
-            return self.async_create_entry(
+            result = self.async_create_entry(
                 title=display_name,
                 data={
                     CONF_CALENDAR_URL: calendar_ref,
@@ -391,6 +391,13 @@ class CalendarSubentryFlow(ConfigSubentryFlow):
                 },
                 unique_id=calendar_ref,
             )
+            # Adding a subentry to an already-loaded entry doesn't by itself
+            # trigger the device/entity setup in __init__.py's
+            # async_setup_entry -- without this, the new calendar's device
+            # and switch/number entities silently never appear until the
+            # entry is reloaded (manually, or at the next HA restart).
+            self.hass.config_entries.async_schedule_reload(entry.entry_id)
+            return result
 
         schema = vol.Schema(
             {
