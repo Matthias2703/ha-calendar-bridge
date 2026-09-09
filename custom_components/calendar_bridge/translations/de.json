@@ -1,0 +1,10 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Calendar Bridge",
+        "description": "Wähle das Kalender-Backend, das du verbinden möchtest."
+      }
+    }
+  }
+}

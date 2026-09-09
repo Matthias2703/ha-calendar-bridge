@@ -1,0 +1,12 @@
+{
+  "domain": "calendar_bridge",
+  "name": "Calendar Bridge",
+  "codeowners": ["@Matthias2703"],
+  "config_flow": true,
+  "documentation": "https://github.com/Matthias2703/ha-calendar-bridge",
+  "integration_type": "service",
+  "iot_class": "cloud_push",
+  "issue_tracker": "https://github.com/Matthias2703/ha-calendar-bridge/issues",
+  "requirements": ["icalendar==7.3.0", "caldav==3.3.0"],
+  "version": "0.1.0"
+}

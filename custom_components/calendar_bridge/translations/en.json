@@ -1,0 +1,10 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Calendar Bridge",
+        "description": "Choose which calendar backend you want to connect."
+      }
+    }
+  }
+}
