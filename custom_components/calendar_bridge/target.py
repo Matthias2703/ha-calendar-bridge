@@ -84,8 +84,15 @@ class CalendarTarget(Protocol):
         start: datetime | date,
         minutes_before: int,
         method: ReminderMethod,
+        *,
+        dry_run: bool = False,
     ) -> bool:
-        """Add a default reminder to a matching, still reminder-less event."""
+        """Add a default reminder to a matching, still reminder-less event.
+
+        With `dry_run=True`, only report whether a match exists -- nothing is
+        written. Used to check every configured calendar for a candidate
+        before committing to patching exactly one of them.
+        """
         ...
 
     async def async_backfill_new_events(
@@ -96,6 +103,12 @@ class CalendarTarget(Protocol):
         method: ReminderMethod,
         lookahead: timedelta,
         skip_backfill: bool,
-    ) -> set[str]:
-        """Poll for events not seen on a previous poll; return every UID seen."""
+    ) -> set[str] | None:
+        """Poll for events not seen on a previous poll; return every UID seen.
+
+        Returns `None` (instead of an empty set) when `calendar_ref` itself
+        couldn't be found/accessed this poll, so the caller can tell "the
+        calendar is genuinely empty" apart from "the lookup failed" and avoid
+        persisting a bogus baseline for the latter.
+        """
         ...

@@ -46,8 +46,13 @@ _REMINDER_METHOD_MAP: dict[ReminderMethod, GoogleReminderMethod] = {
 }
 
 
-class GoogleAccountNotFoundError(Exception):
-    """Raised when the referenced core `google` config entry no longer exists."""
+class GoogleAccountNotFoundError(CalendarNotFoundError):
+    """Raised when the referenced core `google` config entry no longer exists.
+
+    A `CalendarNotFoundError` subclass so every caller that already handles
+    "this calendar/account is gone" (services.py's create_event handler, the
+    reactive listener/poller) catches this case for free.
+    """
 
 
 class _GoogleSessionAuth(AbstractAuth):
@@ -141,16 +146,19 @@ def _build_event(spec: EventSpec) -> GoogleEvent:
         fields["location"] = spec.location
     if spec.rrule:
         fields["recurrence"] = [f"RRULE:{spec.rrule}"]
-    if spec.reminders:
-        fields["reminders"] = Reminders(
-            useDefault=False,
-            overrides=[
-                ReminderOverride(
-                    method=_REMINDER_METHOD_MAP[reminder.method], minutes=reminder.minutes_before
-                )
-                for reminder in spec.reminders
-            ],
-        )
+    # Always set an explicit `reminders`, even when spec.reminders is empty --
+    # an event that's supposed to have zero reminders must say `useDefault:
+    # false` with no overrides, otherwise Google treats it as `useDefault:
+    # true` and silently attaches the calendar's own default reminder.
+    fields["reminders"] = Reminders(
+        useDefault=False,
+        overrides=[
+            ReminderOverride(
+                method=_REMINDER_METHOD_MAP[reminder.method], minutes=reminder.minutes_before
+            )
+            for reminder in spec.reminders
+        ],
+    )
     return GoogleEvent(**fields)
 
 
@@ -197,28 +205,36 @@ class GoogleCalendarTarget:
         start: datetime | date,
         minutes_before: int,
         method: ReminderMethod,
+        *,
+        dry_run: bool = False,
     ) -> bool:
         """Add a default reminder to a matching event that has none.
 
         Mirrors the CalDAV backend's same-named method: catches an event
         created through HA's own `calendar.create_event` service.
         """
-        service, _ = await self._async_service()
-        start_dt = _as_utc_datetime(start)
-        window = timedelta(hours=1)
-        request = ListEventsRequest(
-            calendarId=calendar_ref, timeMin=start_dt - window, timeMax=start_dt + window
-        )
-        response = await service.async_list_events(request)
-        async for page in response:
-            for event in page.items:
-                if event.summary != summary or _has_explicit_reminder(event):
-                    continue
-                await service.async_patch_event(
-                    calendar_ref, cast(str, event.id), _reminder_body(method, minutes_before)
-                )
-                _LOGGER.info("Backfilled a %s reminder onto '%s'", method, summary)
-                return True
+        try:
+            service, _ = await self._async_service()
+            start_dt = _as_utc_datetime(start)
+            window = timedelta(hours=1)
+            request = ListEventsRequest(
+                calendarId=calendar_ref, timeMin=start_dt - window, timeMax=start_dt + window
+            )
+            response = await service.async_list_events(request)
+            async for page in response:
+                for event in page.items:
+                    if event.summary != summary or _has_explicit_reminder(event):
+                        continue
+                    if dry_run:
+                        return True
+                    await service.async_patch_event(
+                        calendar_ref, cast(str, event.id), _reminder_body(method, minutes_before)
+                    )
+                    _LOGGER.info("Backfilled a %s reminder onto '%s'", method, summary)
+                    return True
+        except ApiException:
+            _LOGGER.warning("Could not reach %s to check for a matching event", calendar_ref)
+            return False
         _LOGGER.debug("No matching reminder-less event found for '%s' to backfill", summary)
         return False
 
@@ -230,7 +246,7 @@ class GoogleCalendarTarget:
         method: ReminderMethod,
         lookahead: timedelta,
         skip_backfill: bool,
-    ) -> set[str]:
+    ) -> set[str] | None:
         """Poll the calendar for events not seen on a previous poll.
 
         Catches events created via the native "+" button (Google's calendar
@@ -238,25 +254,34 @@ class GoogleCalendarTarget:
         same frontend reason as CalDAV) or added straight in the Google
         Calendar app/website. See `caldav_target.py`'s same-named method for
         the full rationale -- this is the same design, against a different
-        API.
+        API. Returns `None` (instead of an empty set) if `calendar_ref`
+        couldn't be reached this poll.
         """
-        service, _ = await self._async_service()
-        now = datetime.now(UTC)
-        request = ListEventsRequest(
-            calendarId=calendar_ref, timeMin=now - timedelta(days=1), timeMax=now + lookahead
-        )
-        response = await service.async_list_events(request)
-        seen: set[str] = set()
-        async for page in response:
-            for event in page.items:
-                uid = event.ical_uuid or event.id
-                if not uid:
-                    continue
-                seen.add(uid)
-                if uid in known_uids or skip_backfill or _has_explicit_reminder(event):
-                    continue
-                await service.async_patch_event(
-                    calendar_ref, cast(str, event.id), _reminder_body(method, minutes_before)
-                )
-                _LOGGER.info("Backfilled a %s reminder onto '%s' (poll)", method, event.summary)
+        try:
+            service, _ = await self._async_service()
+            now = datetime.now(UTC)
+            request = ListEventsRequest(
+                calendarId=calendar_ref, timeMin=now - timedelta(days=1), timeMax=now + lookahead
+            )
+            response = await service.async_list_events(request)
+            seen: set[str] = set()
+            async for page in response:
+                for event in page.items:
+                    # `event.id` is unique per recurrence instance; the
+                    # `iCalUID` fallback is shared by every instance of one
+                    # recurring series, so preferring it here would make every
+                    # instance after the first look "already seen" forever.
+                    uid = event.id or event.ical_uuid
+                    if not uid:
+                        continue
+                    seen.add(uid)
+                    if uid in known_uids or skip_backfill or _has_explicit_reminder(event):
+                        continue
+                    await service.async_patch_event(
+                        calendar_ref, cast(str, event.id), _reminder_body(method, minutes_before)
+                    )
+                    _LOGGER.info("Backfilled a %s reminder onto '%s' (poll)", method, event.summary)
+        except ApiException:
+            _LOGGER.warning("Could not reach %s to poll for new events", calendar_ref)
+            return None
         return seen

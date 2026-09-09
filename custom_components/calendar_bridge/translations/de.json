@@ -79,7 +79,8 @@
     },
     "abort": {
       "already_configured": "Dieses Konto ist bereits konfiguriert.",
-      "no_google_account": "Keine Google-Kalender-Integration gefunden. Richte zuerst Home Assistants eingebaute 'Google Kalender'-Integration ein, dann füge sie hier hinzu."
+      "no_google_account": "Keine Google-Kalender-Integration gefunden. Richte zuerst Home Assistants eingebaute 'Google Kalender'-Integration ein, dann füge sie hier hinzu.",
+      "cannot_connect": "Verbindung zum Server nicht möglich."
     }
   },
   "config_subentries": {
@@ -120,7 +121,8 @@
         }
       },
       "abort": {
-        "reconfigure_successful": "Kalender-Defaults aktualisiert."
+        "reconfigure_successful": "Kalender-Defaults aktualisiert.",
+        "cannot_connect": "Verbindung zum Server nicht möglich."
       }
     }
   },

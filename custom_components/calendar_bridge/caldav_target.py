@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING
 
 import caldav
 import icalendar
+from homeassistant.util import dt as dt_util
 
 from .target import (
     DEFAULT_EVENT_DURATION,
@@ -101,14 +102,25 @@ class CalDavCalendarTarget:
         await self._hass.async_add_executor_job(self._save_event, calendar_ref, ical_text)
         return uid
 
+    def _find_calendar(self, client: caldav.DAVClient, calendar_ref: str) -> caldav.Calendar | None:
+        """Find calendar_ref among this client's calendars, or None if absent.
+
+        Raises `CalDavAuthError`/`CalDavConnectionError` (via
+        `discover_calendars`) if the account itself can't be reached at all --
+        that's a different condition from "this one calendar isn't there."
+        """
+        target = calendar_ref.rstrip("/")
+        for calendar in discover_calendars(client):
+            if str(calendar.url).rstrip("/") == target:
+                return calendar
+        return None
+
     def _save_event(self, calendar_ref: str, ical_text: str) -> None:
         client = build_client(self._url, self._username, self._password, self._verify_ssl)
-        target = calendar_ref.rstrip("/")
-        for calendar in client.principal().calendars():  # type: ignore[no-untyped-call]
-            if str(calendar.url).rstrip("/") == target:
-                calendar.save_event(ical_text)
-                return
-        raise CalendarNotFoundError(calendar_ref)
+        calendar = self._find_calendar(client, calendar_ref)
+        if calendar is None:
+            raise CalendarNotFoundError(calendar_ref)
+        calendar.save_event(ical_text)
 
     async def async_backfill_reminder(
         self,
@@ -117,6 +129,8 @@ class CalDavCalendarTarget:
         start: datetime | date,
         minutes_before: int,
         method: ReminderMethod,
+        *,
+        dry_run: bool = False,
     ) -> bool:
         """Add a default reminder to a matching event that has none.
 
@@ -125,9 +139,19 @@ class CalDavCalendarTarget:
         whole reason this integration exists) or anything else that writes
         to this calendar without going through `calendar_bridge.create_event`.
         """
-        return await self._hass.async_add_executor_job(
-            self._backfill_reminder, calendar_ref, summary, start, minutes_before, method
-        )
+        try:
+            return await self._hass.async_add_executor_job(
+                self._backfill_reminder,
+                calendar_ref,
+                summary,
+                start,
+                minutes_before,
+                method,
+                dry_run,
+            )
+        except (CalDavAuthError, CalDavConnectionError):
+            _LOGGER.warning("Could not reach %s to check for a matching event", calendar_ref)
+            return False
 
     def _backfill_reminder(
         self,
@@ -136,18 +160,18 @@ class CalDavCalendarTarget:
         start: datetime | date,
         minutes_before: int,
         method: ReminderMethod,
+        dry_run: bool,
     ) -> bool:
         client = build_client(self._url, self._username, self._password, self._verify_ssl)
-        target = calendar_ref.rstrip("/")
-        calendar = None
-        for cal in client.principal().calendars():  # type: ignore[no-untyped-call]
-            if str(cal.url).rstrip("/") == target:
-                calendar = cal
-                break
+        calendar = self._find_calendar(client, calendar_ref)
         if calendar is None:
             return False
 
-        start_dt = as_utc(
+        # Always a real datetime here (never a bare date) -- `target.as_utc`
+        # passes a `date` through unchanged for the all-day ICS-building path,
+        # but `date_search` needs a genuine datetime window regardless of
+        # whether the matched event itself turns out to be all-day.
+        start_dt = dt_util.as_utc(
             start if isinstance(start, datetime) else datetime.combine(start, datetime.min.time())
         )
         window = timedelta(hours=1)
@@ -158,6 +182,8 @@ class CalDavCalendarTarget:
                 continue
             if list(component.walk("VALARM")):
                 continue  # already has a reminder
+            if dry_run:
+                return True
             component.add_component(self._build_alarm(summary, method, minutes_before))
             event.save()
             _LOGGER.info("Backfilled a %s reminder onto '%s'", method, summary)
@@ -173,7 +199,7 @@ class CalDavCalendarTarget:
         method: ReminderMethod,
         lookahead: timedelta,
         skip_backfill: bool,
-    ) -> set[str]:
+    ) -> set[str] | None:
         """Poll the calendar for events not seen on a previous poll.
 
         Covers what `async_backfill_reminder` can't: an event created via
@@ -187,16 +213,23 @@ class CalDavCalendarTarget:
         `skip_backfill` is set (a calendar's very first poll), no reminder
         is added -- only the current UIDs are collected, so pre-existing
         events a user deliberately left without a reminder aren't touched.
+        Returns `None` -- instead of an empty set -- if `calendar_ref`
+        couldn't be found/reached this poll, so the caller doesn't mistake a
+        failed lookup for "this calendar genuinely has no events."
         """
-        return await self._hass.async_add_executor_job(
-            self._backfill_new_events,
-            calendar_ref,
-            known_uids,
-            minutes_before,
-            method,
-            lookahead,
-            skip_backfill,
-        )
+        try:
+            return await self._hass.async_add_executor_job(
+                self._backfill_new_events,
+                calendar_ref,
+                known_uids,
+                minutes_before,
+                method,
+                lookahead,
+                skip_backfill,
+            )
+        except (CalDavAuthError, CalDavConnectionError):
+            _LOGGER.warning("Could not reach %s to poll for new events", calendar_ref)
+            return None
 
     def _backfill_new_events(
         self,
@@ -206,16 +239,11 @@ class CalDavCalendarTarget:
         method: ReminderMethod,
         lookahead: timedelta,
         skip_backfill: bool,
-    ) -> set[str]:
+    ) -> set[str] | None:
         client = build_client(self._url, self._username, self._password, self._verify_ssl)
-        target = calendar_ref.rstrip("/")
-        calendar = None
-        for cal in client.principal().calendars():  # type: ignore[no-untyped-call]
-            if str(cal.url).rstrip("/") == target:
-                calendar = cal
-                break
+        calendar = self._find_calendar(client, calendar_ref)
         if calendar is None:
-            return set()
+            return None
 
         now = datetime.now(UTC)
         events = calendar.date_search(now - timedelta(days=1), now + lookahead)

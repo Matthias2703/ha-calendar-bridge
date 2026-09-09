@@ -6,6 +6,7 @@ import uuid
 from datetime import UTC, date, datetime, timedelta
 from unittest.mock import MagicMock, patch
 
+import caldav
 import icalendar
 import pytest
 
@@ -428,3 +429,81 @@ async def test_poll_with_skip_backfill_only_collects_uids():
 
     assert seen == {"uid-old"}
     event.save.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_poll_returns_none_when_calendar_not_found():
+    # Distinct from "genuinely zero events": the caller must not persist an
+    # empty baseline for a calendar the lookup itself couldn't find.
+    target = _make_target()
+    mock_client = MagicMock()
+    mock_client.principal.return_value.calendars.return_value = []
+
+    with patch(
+        "custom_components.calendar_bridge.caldav_target.build_client", return_value=mock_client
+    ):
+        seen = await target.async_backfill_new_events(
+            "https://example.test/cal/", set(), 30, "popup", timedelta(days=365), False
+        )
+
+    assert seen is None
+
+
+@pytest.mark.asyncio
+async def test_backfill_reminder_dry_run_does_not_save():
+    target = _make_target()
+    calendar_ref = "https://example.test/cal/"
+    mock_client, mock_calendar = _mock_client_with_calendar(calendar_ref)
+    mock_event = _mock_caldav_event("Native Termin", has_alarm=False)
+    mock_calendar.date_search.return_value = [mock_event]
+
+    with patch(
+        "custom_components.calendar_bridge.caldav_target.build_client", return_value=mock_client
+    ):
+        found = await target.async_backfill_reminder(
+            calendar_ref,
+            "Native Termin",
+            datetime(2026, 10, 1, 9, 0, tzinfo=UTC),
+            30,
+            "popup",
+            dry_run=True,
+        )
+
+    assert found is True
+    mock_event.save.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_backfill_reminder_returns_false_on_connection_error():
+    target = _make_target()
+    mock_client = MagicMock()
+    mock_client.principal.side_effect = caldav.lib.error.DAVError("unreachable")
+
+    with patch(
+        "custom_components.calendar_bridge.caldav_target.build_client", return_value=mock_client
+    ):
+        patched = await target.async_backfill_reminder(
+            "https://example.test/cal/",
+            "Native Termin",
+            datetime(2026, 10, 1, 9, 0, tzinfo=UTC),
+            30,
+            "popup",
+        )
+
+    assert patched is False
+
+
+@pytest.mark.asyncio
+async def test_poll_returns_none_on_connection_error():
+    target = _make_target()
+    mock_client = MagicMock()
+    mock_client.principal.side_effect = caldav.lib.error.DAVError("unreachable")
+
+    with patch(
+        "custom_components.calendar_bridge.caldav_target.build_client", return_value=mock_client
+    ):
+        seen = await target.async_backfill_new_events(
+            "https://example.test/cal/", set(), 30, "popup", timedelta(days=365), False
+        )
+
+    assert seen is None

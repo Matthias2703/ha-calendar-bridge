@@ -30,10 +30,12 @@ class CalendarBridgeReminderSwitch(SwitchEntity):
     """Whether this calendar's events get an automatic reminder.
 
     Mirrors the calendar's `default_reminder_method` subentry setting: on
-    means "popup", off means "none". An explicit reminder passed to
-    calendar_bridge.create_event always wins regardless of this switch --
-    it only controls the default used for a call that doesn't specify one,
-    and what the reactive listener/poller backfill onto events they catch.
+    means whatever non-"none" method is configured (e.g. "popup" for CalDAV,
+    "popup" or "email" for Google), off means "none". An explicit reminder
+    passed to calendar_bridge.create_event always wins regardless of this
+    switch -- it only controls the default used for a call that doesn't
+    specify one, and what the reactive listener/poller backfill onto events
+    they catch.
     """
 
     _attr_has_entity_name = True
@@ -45,11 +47,19 @@ class CalendarBridgeReminderSwitch(SwitchEntity):
         self._subentry_id = subentry_id
         self._attr_unique_id = f"{subentry_id}_automatic_reminder"
         self._attr_device_info = DeviceInfo(identifiers={(DOMAIN, subentry_id)})
+        # Remembers the last non-"none" method so turning the switch back on
+        # restores it (e.g. a Google calendar's "email") instead of always
+        # falling back to "popup".
+        method = entry.subentries[subentry_id].data[CONF_DEFAULT_REMINDER_METHOD]
+        self._last_on_method = method if method != REMINDER_METHOD_NONE else REMINDER_METHOD_POPUP
 
     async def async_added_to_hass(self) -> None:
         self.async_on_remove(self._entry.add_update_listener(self._async_entry_updated))
 
     async def _async_entry_updated(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
+        method = self._entry.subentries[self._subentry_id].data[CONF_DEFAULT_REMINDER_METHOD]
+        if method != REMINDER_METHOD_NONE:
+            self._last_on_method = method
         self.async_write_ha_state()
 
     @property
@@ -60,7 +70,7 @@ class CalendarBridgeReminderSwitch(SwitchEntity):
         )
 
     async def async_turn_on(self, **kwargs: object) -> None:
-        await self._async_set_method(REMINDER_METHOD_POPUP)
+        await self._async_set_method(self._last_on_method)
 
     async def async_turn_off(self, **kwargs: object) -> None:
         await self._async_set_method(REMINDER_METHOD_NONE)

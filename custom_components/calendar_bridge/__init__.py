@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from datetime import datetime, timedelta
+from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import (
@@ -39,6 +41,8 @@ from .google_target import GoogleCalendarTarget
 from .reminder_scheduler import ReminderScheduler
 from .seen_events import SeenEventsTracker
 from .services import CREATE_EVENT_SCHEMA, async_handle_create_event
+
+_LOGGER = logging.getLogger(__name__)
 
 # How long to wait after a calendar.create_event *service* call before
 # searching for the event it wrote -- the write happens after
@@ -118,21 +122,65 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
         for delay in _BACKFILL_RETRY_DELAYS:
             await asyncio.sleep(delay)
 
-            for entry in hass.config_entries.async_entries(DOMAIN):
+            # Check every configured calendar before patching any of them --
+            # a single calendar (async_backfill_reminder with dry_run=True)
+            # only tells us "I have a matching event", not "I'm the one this
+            # create_event call actually targeted". Only act when exactly one
+            # calendar reports a match, so a same-summary event that happens
+            # to exist on a different calendar/account is never mistaken for
+            # the real target.
+            matches: list[tuple[Any, Any]] = []
+            for entry in hass.config_entries.async_loaded_entries(DOMAIN):
                 target = entry.runtime_data
-                for subentry in entry.subentries.values():
+                for subentry in list(entry.subentries.values()):
                     method = subentry.data[CONF_DEFAULT_REMINDER_METHOD]
                     if method == REMINDER_METHOD_NONE:
                         continue
-                    patched = await target.async_backfill_reminder(
+                    try:
+                        found = await target.async_backfill_reminder(
+                            subentry.data[CONF_CALENDAR_URL],
+                            summary,
+                            start,
+                            subentry.data[CONF_DEFAULT_REMINDER_MINUTES],
+                            method,
+                            dry_run=True,
+                        )
+                    except Exception:  # noqa: BLE001 -- one bad calendar must not block the rest
+                        _LOGGER.warning(
+                            "Failed to check %s for a matching event",
+                            subentry.data[CONF_CALENDAR_URL],
+                            exc_info=True,
+                        )
+                        continue
+                    if found:
+                        matches.append((entry, subentry))
+
+            if len(matches) > 1:
+                _LOGGER.warning(
+                    "Found a matching reminder-less event on %d different calendars for "
+                    "'%s' -- skipping the automatic reminder backfill to avoid patching "
+                    "the wrong one",
+                    len(matches),
+                    summary,
+                )
+                return
+            if matches:
+                entry, subentry = matches[0]
+                target = entry.runtime_data
+                method = subentry.data[CONF_DEFAULT_REMINDER_METHOD]
+                try:
+                    await target.async_backfill_reminder(
                         subentry.data[CONF_CALENDAR_URL],
                         summary,
                         start,
                         subentry.data[CONF_DEFAULT_REMINDER_MINUTES],
                         method,
                     )
-                    if patched:
-                        return
+                except Exception:  # noqa: BLE001
+                    _LOGGER.warning(
+                        "Failed to backfill a reminder for '%s'", summary, exc_info=True
+                    )
+                return
 
     hass.bus.async_listen(EVENT_CALL_SERVICE, _async_backfill_reminder)
 
@@ -144,22 +192,37 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
         catch them is to periodically check the calendar for events this
         integration hasn't seen before.
         """
-        for entry in hass.config_entries.async_entries(DOMAIN):
+        for entry in hass.config_entries.async_loaded_entries(DOMAIN):
             target = entry.runtime_data
-            for subentry in entry.subentries.values():
+            for subentry in list(entry.subentries.values()):
                 method = subentry.data[CONF_DEFAULT_REMINDER_METHOD]
-                if method == REMINDER_METHOD_NONE:
-                    continue
                 calendar_ref = subentry.data[CONF_CALENDAR_URL]
-                skip_backfill = not seen_events.has_baseline(calendar_ref)
-                new_uids = await target.async_backfill_new_events(
-                    calendar_ref,
-                    seen_events.known_uids(calendar_ref),
-                    subentry.data[CONF_DEFAULT_REMINDER_MINUTES],
-                    method,
-                    _POLL_LOOKAHEAD,
-                    skip_backfill,
+                # A calendar whose reminder is turned off still needs its
+                # seen-UID baseline kept current -- otherwise every event
+                # created while it was off looks "new" the moment it's
+                # turned back on, and skip_backfill (not just the "none"
+                # method) already tells the backend not to patch anything.
+                skip_backfill = method == REMINDER_METHOD_NONE or not seen_events.has_baseline(
+                    calendar_ref
                 )
+                try:
+                    new_uids = await target.async_backfill_new_events(
+                        calendar_ref,
+                        seen_events.known_uids(calendar_ref),
+                        subentry.data[CONF_DEFAULT_REMINDER_MINUTES],
+                        method,
+                        _POLL_LOOKAHEAD,
+                        skip_backfill,
+                    )
+                except Exception:  # noqa: BLE001 -- one bad calendar must not block the rest
+                    _LOGGER.warning("Failed to poll %s for new events", calendar_ref, exc_info=True)
+                    continue
+                if new_uids is None:
+                    # The calendar itself couldn't be found/reached this poll
+                    # -- don't record an empty baseline for it, or a later,
+                    # genuinely successful poll would treat every one of its
+                    # pre-existing events as brand new.
+                    continue
                 await seen_events.async_add(calendar_ref, new_uids)
 
     async_track_time_interval(hass, _async_poll_for_new_events, _POLL_INTERVAL)

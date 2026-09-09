@@ -79,7 +79,8 @@
     },
     "abort": {
       "already_configured": "This account is already configured.",
-      "no_google_account": "No Google Calendar integration found. Set up Home Assistant's built-in 'Google Calendar' integration first, then add it here."
+      "no_google_account": "No Google Calendar integration found. Set up Home Assistant's built-in 'Google Calendar' integration first, then add it here.",
+      "cannot_connect": "Could not connect to the server."
     }
   },
   "config_subentries": {
@@ -120,7 +121,8 @@
         }
       },
       "abort": {
-        "reconfigure_successful": "Calendar defaults updated."
+        "reconfigure_successful": "Calendar defaults updated.",
+        "cannot_connect": "Could not connect to the server."
       }
     }
   },

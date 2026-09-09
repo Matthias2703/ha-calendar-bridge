@@ -13,6 +13,7 @@ from typing import Any
 
 import caldav
 import voluptuous as vol
+from gcal_sync.exceptions import ApiException
 from gcal_sync.model import Calendar as GoogleCalendar
 from homeassistant.config_entries import (
     ConfigEntry,
@@ -283,7 +284,7 @@ class CalendarBridgeConfigFlow(ConfigFlow, domain=DOMAIN):
         self._abort_if_unique_id_configured()
         try:
             calendars = await async_list_writable_calendars(self.hass, google_entry.entry_id)
-        except GoogleAccountNotFoundError:
+        except (GoogleAccountNotFoundError, ApiException):
             return self.async_abort(reason="cannot_connect")
 
         self._google_entry_id = google_entry.entry_id
@@ -352,9 +353,12 @@ class CalendarSubentryFlow(ConfigSubentryFlow):
 
         if _is_google_entry(entry):
             if not self._google_calendars:
-                self._google_calendars = await async_list_writable_calendars(
-                    self.hass, entry.data[CONF_GOOGLE_ENTRY_ID]
-                )
+                try:
+                    self._google_calendars = await async_list_writable_calendars(
+                        self.hass, entry.data[CONF_GOOGLE_ENTRY_ID]
+                    )
+                except (GoogleAccountNotFoundError, ApiException):
+                    return self.async_abort(reason="cannot_connect")
             choices = {
                 cal_id: name
                 for cal_id, name in _google_calendar_choices(self._google_calendars).items()

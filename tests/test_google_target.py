@@ -100,6 +100,26 @@ async def test_create_event_posts_the_built_body_and_returns_the_ical_uid():
 
 
 @pytest.mark.asyncio
+async def test_create_event_with_no_reminders_explicitly_disables_the_default():
+    # An empty `reminders` tuple must produce `useDefault: false` with no
+    # overrides -- omitting the field entirely would make Google apply the
+    # calendar's own default reminder, defeating an explicit "none" choice.
+    target = _make_target()
+    auth = AsyncMock()
+    auth.post_json.return_value = {"id": "abc123", "iCalUID": "abc123@google.com"}
+    service = _FakeService()
+
+    with _patched(target, service, auth):
+        await target.async_create_event(
+            _CALENDAR_REF,
+            EventSpec(summary="Plain", start=datetime(2026, 9, 10, 14, 0, tzinfo=UTC)),
+        )
+
+    body = auth.post_json.call_args.kwargs["json"]
+    assert body["reminders"] == {"useDefault": False, "overrides": []}
+
+
+@pytest.mark.asyncio
 async def test_create_event_raises_calendar_not_found_on_a_404():
     target = _make_target()
     auth = AsyncMock()
@@ -168,7 +188,9 @@ async def test_poll_backfills_a_new_reminder_less_event():
             _CALENDAR_REF, set(), 30, "popup", _LOOKAHEAD, False
         )
 
-    assert seen == {"uid-1"}
+    # Keyed by the per-instance `id`, not the (possibly shared) `iCalUID` --
+    # see test_poll_treats_separate_instances_of_a_recurring_uid_as_distinct.
+    assert seen == {"evt1"}
     service.async_patch_event.assert_awaited_once()
 
 
@@ -179,10 +201,10 @@ async def test_poll_skips_an_already_known_uid():
 
     with _patched(target, service):
         seen = await target.async_backfill_new_events(
-            _CALENDAR_REF, {"uid-1"}, 30, "popup", _LOOKAHEAD, False
+            _CALENDAR_REF, {"evt1"}, 30, "popup", _LOOKAHEAD, False
         )
 
-    assert seen == {"uid-1"}
+    assert seen == {"evt1"}
     service.async_patch_event.assert_not_awaited()
 
 
@@ -196,5 +218,71 @@ async def test_poll_with_skip_backfill_only_collects_uids():
             _CALENDAR_REF, set(), 30, "popup", _LOOKAHEAD, True
         )
 
-    assert seen == {"uid-1"}
+    assert seen == {"evt1"}
     service.async_patch_event.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_poll_treats_separate_instances_of_a_recurring_uid_as_distinct():
+    # Every instance of one recurring event shares the same iCalUID, but each
+    # has its own `id` -- keying the seen-set by `id` (not `iCalUID`) means a
+    # later-appearing instance of an already-known series still gets checked
+    # and backfilled, instead of being silently skipped forever because its
+    # shared iCalUID was already recorded.
+    target = _make_target()
+    service = _FakeService([_google_event("evt-instance-2", "Recurring", ical_uuid="series-uid")])
+
+    with _patched(target, service):
+        seen = await target.async_backfill_new_events(
+            _CALENDAR_REF, {"evt-instance-1"}, 30, "popup", _LOOKAHEAD, False
+        )
+
+    assert seen == {"evt-instance-1", "evt-instance-2"}
+    service.async_patch_event.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_backfill_reminder_dry_run_does_not_patch():
+    target = _make_target()
+    service = _FakeService([_google_event("evt1", "Poll test")])
+
+    with _patched(target, service):
+        found = await target.async_backfill_reminder(
+            _CALENDAR_REF,
+            "Poll test",
+            datetime(2026, 9, 10, 14, 0, tzinfo=UTC),
+            30,
+            "popup",
+            dry_run=True,
+        )
+
+    assert found is True
+    service.async_patch_event.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_backfill_reminder_returns_false_on_api_error():
+    target = _make_target()
+    service = _FakeService()
+    service.async_list_events.side_effect = ApiException("boom")
+
+    with _patched(target, service):
+        patched = await target.async_backfill_reminder(
+            _CALENDAR_REF, "Poll test", datetime(2026, 9, 10, 14, 0, tzinfo=UTC), 30, "popup"
+        )
+
+    assert patched is False
+
+
+@pytest.mark.asyncio
+async def test_poll_returns_none_on_api_error():
+    target = _make_target()
+    service = _FakeService()
+    service.async_list_events.side_effect = ApiException("boom")
+
+    with _patched(target, service):
+        seen = await target.async_backfill_new_events(
+            _CALENDAR_REF, set(), 30, "popup", _LOOKAHEAD, False
+        )
+
+    assert seen is None
