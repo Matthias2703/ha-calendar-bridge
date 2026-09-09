@@ -67,6 +67,12 @@ mypy --strict custom_components/calendar_bridge
 
 Early development — see [open issues](https://github.com/Matthias2703/ha-calendar-bridge/issues) and the project roadmap for current scope.
 
+## Also by me
+
+- [Hausgedächtnis](https://www.viema.digital/hausgedaechtnis/) — app for keeping all your home's paperwork (invoices, warranties, maintenance records, photos) in one place
+- [freiluftkompass](https://www.freiluftkompass.de/) — independent tests, comparisons & guides for camping and motorhome gear
+- [ai-finden](https://www.ai-finden.de/) — compares AI tools for DACH businesses with GDPR/privacy ratings
+
 ## License
 
 [MIT](LICENSE)
