@@ -37,7 +37,7 @@ class ReminderScheduler:
 
     def __init__(self, hass: HomeAssistant) -> None:
         self._hass = hass
-        self._store: Store = Store(hass, _STORAGE_VERSION, _STORAGE_KEY)
+        self._store: Store[dict[str, Any]] = Store(hass, _STORAGE_VERSION, _STORAGE_KEY)
         self._unsub: dict[str, Any] = {}
 
     async def async_load(self) -> None:

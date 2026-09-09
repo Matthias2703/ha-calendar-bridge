@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from unittest.mock import MagicMock, patch
 
 import icalendar
@@ -119,6 +119,42 @@ async def test_missing_end_defaults_to_a_one_hour_dtend():
     cal = icalendar.Calendar.from_ical(ics)
     event = next(iter(cal.walk("VEVENT")))
     assert event["dtend"].dt == datetime(2026, 10, 1, 10, 0, tzinfo=UTC)
+
+
+@pytest.mark.asyncio
+async def test_all_day_event_uses_date_values_with_exclusive_end():
+    # RFC 5545: an all-day DTEND is exclusive, so a single-day event needs
+    # DTEND = DTSTART + 1 day, not DTEND == DTSTART.
+    target = _make_target()
+    spec = EventSpec(summary="Birthday", start=datetime(2026, 10, 1, 9, 0), all_day=True)
+
+    _uid, mock_calendar = await _create_event(target, "https://example.test/cal/", spec)
+
+    ics = mock_calendar.save_event.call_args[0][0]
+    cal = icalendar.Calendar.from_ical(ics)
+    event = next(iter(cal.walk("VEVENT")))
+    assert event["dtstart"].dt == date(2026, 10, 1)
+    assert event["dtend"].dt == date(2026, 10, 2)
+    assert type(event["dtstart"].dt) is date
+
+
+@pytest.mark.asyncio
+async def test_multi_day_all_day_event_keeps_its_own_end_date():
+    target = _make_target()
+    spec = EventSpec(
+        summary="Vacation",
+        start=datetime(2026, 10, 1, 9, 0),
+        end=datetime(2026, 10, 5, 9, 0),
+        all_day=True,
+    )
+
+    _uid, mock_calendar = await _create_event(target, "https://example.test/cal/", spec)
+
+    ics = mock_calendar.save_event.call_args[0][0]
+    cal = icalendar.Calendar.from_ical(ics)
+    event = next(iter(cal.walk("VEVENT")))
+    assert event["dtstart"].dt == date(2026, 10, 1)
+    assert event["dtend"].dt == date(2026, 10, 5)
 
 
 @pytest.mark.asyncio

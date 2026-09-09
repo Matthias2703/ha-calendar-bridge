@@ -16,6 +16,7 @@ from homeassistant.config_entries import (
     ConfigEntry,
     ConfigFlow,
     ConfigFlowResult,
+    ConfigSubentryData,
     ConfigSubentryFlow,
     SubentryFlowResult,
 )
@@ -193,7 +194,7 @@ class CalendarBridgeConfigFlow(ConfigFlow, domain=DOMAIN):
         """Pick one or more target calendars for this account."""
         choices = _calendar_choices(self._caldav_calendars)
         if user_input is not None:
-            subentries = [
+            subentries: list[ConfigSubentryData] = [
                 {
                     "subentry_type": "calendar",
                     "title": choices[calendar_url],

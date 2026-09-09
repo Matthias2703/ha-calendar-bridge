@@ -21,7 +21,7 @@
       },
       "caldav": {
         "title": "Connect a CalDAV account",
-        "description": "e.g. iCloud (https://caldav.icloud.com). Use an app-specific password if your provider requires one.",
+        "description": "e.g. iCloud. Use an app-specific password if your provider requires one.",
         "data": {
           "url": "Server URL",
           "username": "Username",
@@ -57,6 +57,10 @@
   "config_subentries": {
     "calendar": {
       "entry_type": "Calendar",
+      "initiate_flow": {
+        "user": "Add a calendar",
+        "reconfigure": "Edit calendar defaults"
+      },
       "step": {
         "user": {
           "title": "Add a calendar",
@@ -114,6 +118,10 @@
       "name": "Create event",
       "description": "Creates a calendar event with a real reminder/alarm and, optionally, a recurrence rule.",
       "fields": {
+        "device_id": {
+          "name": "Calendars",
+          "description": "Which Calendar Bridge calendar(s) to create the event on. Defaults to the configured default target if omitted."
+        },
         "summary": {
           "name": "Summary",
           "description": "Event title."

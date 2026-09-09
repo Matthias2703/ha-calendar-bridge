@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import dataclasses
 import logging
-from datetime import timedelta
+from collections.abc import Mapping
+from datetime import datetime, time, timedelta
 from typing import Any
 
 import voluptuous as vol
@@ -12,6 +13,7 @@ from homeassistant.const import ATTR_DEVICE_ID
 from homeassistant.core import HomeAssistant, ServiceCall, ServiceResponse
 from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers import config_validation as cv
+from homeassistant.util import dt as dt_util
 
 from .const import (
     ATTR_ALL_DAY,
@@ -97,7 +99,7 @@ def _reminders_from_call(data: dict[str, Any]) -> tuple[ReminderSpec, ...] | Non
     return None
 
 
-def _default_reminders(subentry_data: dict[str, Any]) -> tuple[ReminderSpec, ...]:
+def _default_reminders(subentry_data: Mapping[str, Any]) -> tuple[ReminderSpec, ...]:
     method = subentry_data[CONF_DEFAULT_REMINDER_METHOD]
     if method == REMINDER_METHOD_NONE:
         return ()
@@ -132,7 +134,7 @@ async def async_handle_create_event(hass: HomeAssistant, call: ServiceCall) -> S
         rrule=call.data.get(ATTR_RRULE),
     )
 
-    created: dict[str, str] = {}
+    created: dict[str, Any] = {}
     for device_id in device_ids:
         resolved = async_resolve_device(hass, device_id)
         if resolved is None:
@@ -172,7 +174,16 @@ async def _async_schedule_notification(
     hass: HomeAssistant, notify_data: dict[str, Any], spec: EventSpec
 ) -> None:
     """Schedule the optional HA-native notification reminder."""
-    fire_at = spec.start - timedelta(minutes=notify_data[ATTR_MINUTES_BEFORE])
+    # spec.start is a plain datetime in practice (all-day events don't carry
+    # a "minutes before" notification), but EventSpec types it as
+    # `datetime | date` for the CalDAV all-day path -- narrow it here.
+    start = (
+        spec.start if isinstance(spec.start, datetime) else datetime.combine(spec.start, time.min)
+    )
+    # HA's cv.datetime returns a naive datetime for a call without a UTC
+    # offset -- async_track_point_in_time needs a tz-aware one to compare
+    # against dt_util.utcnow() correctly.
+    fire_at = dt_util.as_utc(start) - timedelta(minutes=notify_data[ATTR_MINUTES_BEFORE])
     message = notify_data.get(ATTR_NOTIFY_MESSAGE) or f"Reminder: {spec.summary}"
 
     scheduler: ReminderScheduler = hass.data[DOMAIN]["reminder_scheduler"]

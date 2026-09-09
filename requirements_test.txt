@@ -2,3 +2,6 @@ pytest
 pytest-asyncio
 pytest-cov
 pytest-homeassistant-custom-component
+icalendar==6.3.1
+caldav==2.1.0
+types-icalendar==6.3.1.20250914

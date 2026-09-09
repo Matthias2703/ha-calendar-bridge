@@ -21,7 +21,7 @@
       },
       "caldav": {
         "title": "CalDAV-Konto verbinden",
-        "description": "z. B. iCloud (https://caldav.icloud.com). Nutze ein App-spezifisches Passwort, falls dein Anbieter das verlangt.",
+        "description": "z. B. iCloud. Nutze ein App-spezifisches Passwort, falls dein Anbieter das verlangt.",
         "data": {
           "url": "Server-URL",
           "username": "Benutzername",
@@ -57,6 +57,10 @@
   "config_subentries": {
     "calendar": {
       "entry_type": "Kalender",
+      "initiate_flow": {
+        "user": "Kalender hinzufügen",
+        "reconfigure": "Kalender-Defaults bearbeiten"
+      },
       "step": {
         "user": {
           "title": "Kalender hinzufügen",
@@ -114,6 +118,10 @@
       "name": "Termin erstellen",
       "description": "Erstellt einen Kalendertermin mit einer echten Erinnerung/Alarm und optional einer Wiederholungsregel.",
       "fields": {
+        "device_id": {
+          "name": "Kalender",
+          "description": "Auf welchem/welchen Calendar-Bridge-Kalender(n) der Termin erstellt werden soll. Ohne Angabe wird der konfigurierte Standard-Kalender verwendet."
+        },
         "summary": {
           "name": "Titel",
           "description": "Titel des Termins."

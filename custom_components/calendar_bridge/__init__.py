@@ -5,6 +5,8 @@ from __future__ import annotations
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_PASSWORD, CONF_URL, CONF_USERNAME, CONF_VERIFY_SSL
 from homeassistant.core import HomeAssistant, ServiceCall, ServiceResponse, SupportsResponse
+from homeassistant.helpers import config_validation as cv
+from homeassistant.helpers.typing import ConfigType
 
 from .caldav_target import CalDavCalendarTarget
 from .const import CONF_DISPLAY_NAME, DOMAIN, SERVICE_CREATE_EVENT
@@ -16,8 +18,10 @@ type CalendarBridgeConfigEntry = ConfigEntry[CalDavCalendarTarget]
 
 __all__ = ["DOMAIN"]
 
+CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 
-async def async_setup(hass: HomeAssistant, config: dict) -> bool:
+
+async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     """Set up the Calendar Bridge integration and register its global service."""
     scheduler = ReminderScheduler(hass)
     await scheduler.async_load()

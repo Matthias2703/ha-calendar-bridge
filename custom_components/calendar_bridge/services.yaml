@@ -1,8 +1,11 @@
 create_event:
-  target:
-    device:
-      integration: calendar_bridge
   fields:
+    device_id:
+      selector:
+        device:
+          filter:
+            integration: calendar_bridge
+          multiple: true
     summary:
       required: true
       selector:

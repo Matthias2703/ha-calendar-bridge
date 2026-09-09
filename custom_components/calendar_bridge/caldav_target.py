@@ -48,7 +48,8 @@ def build_client(url: str, username: str, password: str, verify_ssl: bool) -> ca
 def discover_calendars(client: caldav.DAVClient) -> list[caldav.Calendar]:
     """Connect and return the account's calendars. Blocking — run via the executor."""
     try:
-        return list(client.principal().calendars())
+        # caldav ships no type stubs, so its own methods are untyped.
+        return list(client.principal().calendars())  # type: ignore[no-untyped-call]
     except caldav.lib.error.AuthorizationError as err:
         raise CalDavAuthError from err
     except (caldav.lib.error.DAVError, OSError) as err:
@@ -65,6 +66,23 @@ def _as_utc(value: datetime | date) -> datetime | date:
     if isinstance(value, datetime):
         return dt_util.as_utc(value)
     return value
+
+
+def _as_date(value: datetime | date) -> date:
+    return value.date() if isinstance(value, datetime) else value
+
+
+def _all_day_bounds(start: datetime | date, end: datetime | date | None) -> tuple[date, date]:
+    """Compute the DTSTART/DTEND dates for an all-day event.
+
+    RFC 5545 all-day DTEND is exclusive -- a single-day event needs
+    DTEND = DTSTART + 1 day, not DTEND == DTSTART.
+    """
+    start_date = _as_date(start)
+    end_date = _as_date(end) if end is not None else start_date
+    if end_date <= start_date:
+        end_date = start_date + timedelta(days=1)
+    return start_date, end_date
 
 
 class CalDavCalendarTarget:
@@ -111,7 +129,7 @@ class CalDavCalendarTarget:
     def _save_event(self, calendar_ref: str, ical_text: str) -> None:
         client = build_client(self._url, self._username, self._password, self._verify_ssl)
         target = calendar_ref.rstrip("/")
-        for calendar in client.principal().calendars():
+        for calendar in client.principal().calendars():  # type: ignore[no-untyped-call]
             if str(calendar.url).rstrip("/") == target:
                 calendar.save_event(ical_text)
                 return
@@ -132,10 +150,15 @@ class CalDavCalendarTarget:
         event.add("uid", uid)
         event.add("summary", spec.summary)
         event.add("dtstamp", datetime.now(UTC))
-        start = _as_utc(spec.start)
-        event.add("dtstart", start)
-        end = _as_utc(spec.end) if spec.end is not None else start + _DEFAULT_EVENT_DURATION
-        event.add("dtend", end)
+        if spec.all_day:
+            start_date, end_date = _all_day_bounds(spec.start, spec.end)
+            event.add("dtstart", start_date)
+            event.add("dtend", end_date)
+        else:
+            start = _as_utc(spec.start)
+            event.add("dtstart", start)
+            end = _as_utc(spec.end) if spec.end is not None else start + _DEFAULT_EVENT_DURATION
+            event.add("dtend", end)
         if spec.description:
             event.add("description", spec.description)
         if spec.location:
