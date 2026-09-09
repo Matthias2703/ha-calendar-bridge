@@ -193,6 +193,77 @@ class CalDavCalendarTarget:
         _LOGGER.debug("No matching reminder-less event found for '%s' to backfill", summary)
         return False
 
+    async def async_backfill_new_events(
+        self,
+        calendar_ref: str,
+        known_uids: set[str],
+        minutes_before: int,
+        method: ReminderMethod,
+        lookahead: timedelta,
+        skip_backfill: bool,
+    ) -> set[str]:
+        """Poll the calendar for events not seen on a previous poll.
+
+        Covers what `async_backfill_reminder` can't: an event created via
+        the native "+" button (the frontend calls the `calendar/event/create`
+        websocket command directly, not the `calendar.create_event` service,
+        so EVENT_CALL_SERVICE never fires for it) or added straight in the
+        iOS Calendar app and picked up via iCloud sync.
+
+        Returns every UID seen this poll, whether or not it got a reminder,
+        so the caller can merge it into its persisted baseline. When
+        `skip_backfill` is set (a calendar's very first poll), no reminder
+        is added -- only the current UIDs are collected, so pre-existing
+        events a user deliberately left without a reminder aren't touched.
+        """
+        return await self._hass.async_add_executor_job(
+            self._backfill_new_events,
+            calendar_ref,
+            known_uids,
+            minutes_before,
+            method,
+            lookahead,
+            skip_backfill,
+        )
+
+    def _backfill_new_events(
+        self,
+        calendar_ref: str,
+        known_uids: set[str],
+        minutes_before: int,
+        method: ReminderMethod,
+        lookahead: timedelta,
+        skip_backfill: bool,
+    ) -> set[str]:
+        client = build_client(self._url, self._username, self._password, self._verify_ssl)
+        target = calendar_ref.rstrip("/")
+        calendar = None
+        for cal in client.principal().calendars():  # type: ignore[no-untyped-call]
+            if str(cal.url).rstrip("/") == target:
+                calendar = cal
+                break
+        if calendar is None:
+            return set()
+
+        now = datetime.now(UTC)
+        events = calendar.date_search(now - timedelta(days=1), now + lookahead)
+        seen: set[str] = set()
+        for event in events:
+            component = event.icalendar_component
+            uid = str(component.get("uid", ""))
+            if not uid:
+                continue
+            seen.add(uid)
+            if uid in known_uids or skip_backfill:
+                continue
+            if list(component.walk("VALARM")):
+                continue  # already has a reminder
+            summary = str(component.get("summary", ""))
+            component.add_component(self._build_alarm(summary, method, minutes_before))
+            event.save()
+            _LOGGER.info("Backfilled a %s reminder onto '%s' (poll)", method, summary)
+        return seen
+
     def _build_ical(self, spec: EventSpec) -> tuple[str, str]:
         # Plain UUID, no "@calendar-bridge" suffix: the UID also becomes the
         # PUT filename (via caldav's quote(id) + ".ics"), and an unescaped

@@ -357,3 +357,74 @@ async def test_backfill_returns_false_when_calendar_not_found():
         )
 
     assert patched is False
+
+
+async def _poll(
+    target: CalDavCalendarTarget,
+    calendar_ref: str,
+    mock_calendar: MagicMock,
+    known_uids: set[str],
+    skip_backfill: bool = False,
+) -> set[str]:
+    with patch(
+        "custom_components.calendar_bridge.caldav_target.build_client",
+        return_value=_client_for(calendar_ref, mock_calendar),
+    ):
+        return await target.async_backfill_new_events(
+            calendar_ref, known_uids, 30, "popup", timedelta(days=365), skip_backfill
+        )
+
+
+def _client_for(calendar_ref: str, mock_calendar: MagicMock) -> MagicMock:
+    mock_calendar.url = calendar_ref
+    mock_client = MagicMock()
+    mock_client.principal.return_value.calendars.return_value = [mock_calendar]
+    return mock_client
+
+
+@pytest.mark.asyncio
+async def test_poll_backfills_a_new_reminder_less_event():
+    target = _make_target()
+    calendar_ref = "https://example.test/cal/"
+    mock_calendar = MagicMock()
+    event = _mock_caldav_event("Native Termin", has_alarm=False)
+    event.icalendar_component.add("uid", "uid-1")
+    mock_calendar.date_search.return_value = [event]
+
+    seen = await _poll(target, calendar_ref, mock_calendar, known_uids=set())
+
+    assert seen == {"uid-1"}
+    event.save.assert_called_once()
+    assert list(event.icalendar_component.walk("VALARM"))
+
+
+@pytest.mark.asyncio
+async def test_poll_skips_an_already_known_uid():
+    target = _make_target()
+    calendar_ref = "https://example.test/cal/"
+    mock_calendar = MagicMock()
+    event = _mock_caldav_event("Native Termin", has_alarm=False)
+    event.icalendar_component.add("uid", "uid-1")
+    mock_calendar.date_search.return_value = [event]
+
+    seen = await _poll(target, calendar_ref, mock_calendar, known_uids={"uid-1"})
+
+    assert seen == {"uid-1"}
+    event.save.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_poll_with_skip_backfill_only_collects_uids():
+    # A calendar's very first poll: establish the baseline without touching
+    # any pre-existing event a user may have deliberately left reminder-less.
+    target = _make_target()
+    calendar_ref = "https://example.test/cal/"
+    mock_calendar = MagicMock()
+    event = _mock_caldav_event("Old Event", has_alarm=False)
+    event.icalendar_component.add("uid", "uid-old")
+    mock_calendar.date_search.return_value = [event]
+
+    seen = await _poll(target, calendar_ref, mock_calendar, known_uids=set(), skip_backfill=True)
+
+    assert seen == {"uid-old"}
+    event.save.assert_not_called()

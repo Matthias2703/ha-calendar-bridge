@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timedelta
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import (
@@ -17,6 +18,7 @@ from homeassistant.const import (
 )
 from homeassistant.core import Event, HomeAssistant, ServiceCall, ServiceResponse, SupportsResponse
 from homeassistant.helpers import config_validation as cv
+from homeassistant.helpers.event import async_track_time_interval
 from homeassistant.helpers.typing import ConfigType
 from homeassistant.util import dt as dt_util
 
@@ -32,12 +34,33 @@ from .const import (
 )
 from .device import async_create_or_update_device
 from .reminder_scheduler import ReminderScheduler
+from .seen_events import SeenEventsTracker
 from .services import CREATE_EVENT_SCHEMA, async_handle_create_event
 
-# How long to wait after a native calendar.create_event call before searching
-# for the event it wrote -- the write happens after EVENT_CALL_SERVICE fires,
-# so there's no way to know exactly when it lands on the CalDAV server.
-_BACKFILL_DELAY = 3
+# How long to wait after a calendar.create_event *service* call before
+# searching for the event it wrote -- the write happens after
+# EVENT_CALL_SERVICE fires, so there's no way to know exactly when it lands
+# on the CalDAV server. A single fixed delay isn't enough: HA core's own
+# caldav integration has been observed taking well over 3s per write against
+# iCloud (intermittent HTTP/3 connection issues, unrelated to this
+# integration's own CalDAV client), which silently made the first search
+# miss a since-created event. Retry with backoff instead of picking one
+# delay long enough to cover the worst case every time.
+#
+# This only fires for something that actually calls the calendar.create_event
+# *service* (an automation/script action). It does NOT cover the native "+"
+# button: the frontend calls the `calendar/event/create` websocket command
+# directly rather than the service, so EVENT_CALL_SERVICE never fires for it
+# (confirmed by reading home-assistant/frontend's src/data/calendar.ts). The
+# periodic poll below is what actually covers that case.
+_BACKFILL_RETRY_DELAYS = (3, 5, 10, 15, 15)
+
+# Catches everything the listener above can't: the native "+" button, and an
+# event added straight in the iOS Calendar app and picked up via iCloud sync.
+# Polling is the only mechanism that works for both, since neither goes
+# through any HA event or service call.
+_POLL_INTERVAL = timedelta(seconds=60)
+_POLL_LOOKAHEAD = timedelta(days=365)
 
 type CalendarBridgeConfigEntry = ConfigEntry[CalDavCalendarTarget]
 
@@ -50,7 +73,9 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     """Set up the Calendar Bridge integration and register its global service."""
     scheduler = ReminderScheduler(hass)
     await scheduler.async_load()
-    hass.data[DOMAIN] = {"reminder_scheduler": scheduler}
+    seen_events = SeenEventsTracker(hass)
+    await seen_events.async_load()
+    hass.data[DOMAIN] = {"reminder_scheduler": scheduler, "seen_events": seen_events}
 
     async def _async_create_event(call: ServiceCall) -> ServiceResponse:
         return await async_handle_create_event(hass, call)
@@ -85,25 +110,54 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
         if start is None:
             return
 
-        await asyncio.sleep(_BACKFILL_DELAY)
+        for delay in _BACKFILL_RETRY_DELAYS:
+            await asyncio.sleep(delay)
 
+            for entry in hass.config_entries.async_entries(DOMAIN):
+                target = entry.runtime_data
+                for subentry in entry.subentries.values():
+                    method = subentry.data[CONF_DEFAULT_REMINDER_METHOD]
+                    if method == REMINDER_METHOD_NONE:
+                        continue
+                    patched = await target.async_backfill_reminder(
+                        subentry.data[CONF_CALENDAR_URL],
+                        summary,
+                        start,
+                        subentry.data[CONF_DEFAULT_REMINDER_MINUTES],
+                        method,
+                    )
+                    if patched:
+                        return
+
+    hass.bus.async_listen(EVENT_CALL_SERVICE, _async_backfill_reminder)
+
+    async def _async_poll_for_new_events(_now: datetime) -> None:
+        """Catch events the EVENT_CALL_SERVICE listener above can't.
+
+        The native "+" button and a direct iOS Calendar edit (synced via
+        iCloud) never fire any HA event or service call, so the only way to
+        catch them is to periodically check the calendar for events this
+        integration hasn't seen before.
+        """
         for entry in hass.config_entries.async_entries(DOMAIN):
             target = entry.runtime_data
             for subentry in entry.subentries.values():
                 method = subentry.data[CONF_DEFAULT_REMINDER_METHOD]
                 if method == REMINDER_METHOD_NONE:
                     continue
-                patched = await target.async_backfill_reminder(
-                    subentry.data[CONF_CALENDAR_URL],
-                    summary,
-                    start,
+                calendar_ref = subentry.data[CONF_CALENDAR_URL]
+                skip_backfill = not seen_events.has_baseline(calendar_ref)
+                new_uids = await target.async_backfill_new_events(
+                    calendar_ref,
+                    seen_events.known_uids(calendar_ref),
                     subentry.data[CONF_DEFAULT_REMINDER_MINUTES],
                     method,
+                    _POLL_LOOKAHEAD,
+                    skip_backfill,
                 )
-                if patched:
-                    return
+                await seen_events.async_add(calendar_ref, new_uids)
 
-    hass.bus.async_listen(EVENT_CALL_SERVICE, _async_backfill_reminder)
+    async_track_time_interval(hass, _async_poll_for_new_events, _POLL_INTERVAL)
     return True
 
 
