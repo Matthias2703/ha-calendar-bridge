@@ -29,11 +29,13 @@ from .const import (
     CONF_DEFAULT_REMINDER_METHOD,
     CONF_DEFAULT_REMINDER_MINUTES,
     CONF_DISPLAY_NAME,
+    CONF_GOOGLE_ENTRY_ID,
     DOMAIN,
     REMINDER_METHOD_NONE,
     SERVICE_CREATE_EVENT,
 )
 from .device import async_create_or_update_device
+from .google_target import GoogleCalendarTarget
 from .reminder_scheduler import ReminderScheduler
 from .seen_events import SeenEventsTracker
 from .services import CREATE_EVENT_SCHEMA, async_handle_create_event
@@ -65,7 +67,7 @@ _POLL_LOOKAHEAD = timedelta(days=365)
 
 PLATFORMS: list[Platform] = [Platform.SWITCH, Platform.NUMBER]
 
-type CalendarBridgeConfigEntry = ConfigEntry[CalDavCalendarTarget]
+type CalendarBridgeConfigEntry = ConfigEntry[CalDavCalendarTarget | GoogleCalendarTarget]
 
 __all__ = ["DOMAIN"]
 
@@ -165,15 +167,18 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: CalendarBridgeConfigEntry) -> bool:
-    """Set up a Calendar Bridge account (CalDAV for now) from a config entry."""
-    entry.runtime_data = CalDavCalendarTarget(
-        hass,
-        entry.data[CONF_URL],
-        entry.data[CONF_USERNAME],
-        entry.data[CONF_PASSWORD],
-        entry.data[CONF_VERIFY_SSL],
-        entry.data[CONF_USERNAME],
-    )
+    """Set up a Calendar Bridge account (CalDAV or Google) from a config entry."""
+    if CONF_GOOGLE_ENTRY_ID in entry.data:
+        entry.runtime_data = GoogleCalendarTarget(hass, entry.data[CONF_GOOGLE_ENTRY_ID])
+    else:
+        entry.runtime_data = CalDavCalendarTarget(
+            hass,
+            entry.data[CONF_URL],
+            entry.data[CONF_USERNAME],
+            entry.data[CONF_PASSWORD],
+            entry.data[CONF_VERIFY_SSL],
+            entry.data[CONF_USERNAME],
+        )
 
     for subentry_id, subentry in entry.subentries.items():
         async_create_or_update_device(hass, entry, subentry_id, subentry.data[CONF_DISPLAY_NAME])

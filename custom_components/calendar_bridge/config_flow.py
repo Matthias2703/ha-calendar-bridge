@@ -1,8 +1,9 @@
 """Config flow for Calendar Bridge.
 
-Google's OAuth branch lands in a later phase (see the project plan) — for now
-the menu only offers CalDAV, which needs no external redirect and is enough
-to validate the whole config-subentry/device/service plumbing end to end.
+The Google branch deliberately has no OAuth screen of its own -- it can only
+offer an already-configured core `google` integration account as a source
+(see `google_target.py`'s module docstring for why), so it's only shown at
+all when at least one such account exists.
 """
 
 from __future__ import annotations
@@ -12,6 +13,7 @@ from typing import Any
 
 import caldav
 import voluptuous as vol
+from gcal_sync.model import Calendar as GoogleCalendar
 from homeassistant.config_entries import (
     ConfigEntry,
     ConfigFlow,
@@ -31,16 +33,21 @@ from .const import (
     CONF_DEFAULT_REMINDER_MINUTES,
     CONF_DEFAULT_TARGET,
     CONF_DISPLAY_NAME,
+    CONF_GOOGLE_ENTRY_ID,
     DEFAULT_REMINDER_METHOD,
     DEFAULT_REMINDER_MINUTES,
     DOMAIN,
     MAX_REMINDER_MINUTES,
     MIN_REMINDER_MINUTES,
+    REMINDER_METHOD_EMAIL,
     REMINDER_METHOD_NONE,
     REMINDER_METHOD_POPUP,
 )
+from .google_target import GoogleAccountNotFoundError, async_list_writable_calendars
 
 _LOGGER = logging.getLogger(__name__)
+
+_GOOGLE_DOMAIN = "google"
 
 _CALDAV_SCHEMA = vol.Schema(
     {
@@ -90,6 +97,13 @@ def _calendar_choices(calendars: list[caldav.Calendar]) -> dict[str, str]:
     return {str(cal.url): (cal.name or str(cal.url)) for cal in calendars}
 
 
+def _google_calendar_choices(calendars: list[GoogleCalendar]) -> dict[str, str]:
+    return {cal.id: (cal.summary or cal.id) for cal in calendars}
+
+
+_GOOGLE_REMINDER_METHODS = (REMINDER_METHOD_POPUP, REMINDER_METHOD_EMAIL, REMINDER_METHOD_NONE)
+
+
 class CalendarBridgeConfigFlow(ConfigFlow, domain=DOMAIN):
     """Handle the initial setup of a Calendar Bridge account."""
 
@@ -99,6 +113,8 @@ class CalendarBridgeConfigFlow(ConfigFlow, domain=DOMAIN):
         self._caldav_data: dict[str, Any] = {}
         self._caldav_calendars: list[caldav.Calendar] = []
         self._last_test_error: str | None = None
+        self._google_entry_id: str | None = None
+        self._google_calendars: list[GoogleCalendar] = []
 
     @classmethod
     @callback
@@ -109,14 +125,24 @@ class CalendarBridgeConfigFlow(ConfigFlow, domain=DOMAIN):
         return {"calendar": CalendarSubentryFlow}
 
     async def async_step_user(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
-        """Choose a backend. Only CalDAV is wired up so far."""
+        """Choose a backend."""
+        menu_options = []
         if self._existing_caldav_entries():
-            return self.async_show_menu(step_id="user", menu_options=["caldav_existing", "caldav"])
-        return await self.async_step_caldav()
+            menu_options.append("caldav_existing")
+        menu_options.append("caldav")
+        if self._existing_google_entries():
+            menu_options.append("google")
+        if len(menu_options) == 1:
+            return await self.async_step_caldav()
+        return self.async_show_menu(step_id="user", menu_options=menu_options)
 
     def _existing_caldav_entries(self) -> list[ConfigEntry]:
         """Core `caldav` accounts already set up in this HA instance."""
         return self.hass.config_entries.async_entries("caldav")
+
+    def _existing_google_entries(self) -> list[ConfigEntry]:
+        """Core `google` accounts already set up in this HA instance."""
+        return self.hass.config_entries.async_entries(_GOOGLE_DOMAIN)
 
     async def async_step_caldav_existing(
         self, user_input: dict[str, Any] | None = None
@@ -231,46 +257,139 @@ class CalendarBridgeConfigFlow(ConfigFlow, domain=DOMAIN):
         )
         return self.async_show_form(step_id="caldav_calendar", data_schema=schema)
 
+    async def async_step_google(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
+        """Pick which existing core `google` account to borrow, if more than one.
+
+        Never asks for a Client ID/Secret or shows a consent screen -- this
+        only ever reuses the OAuth session of an account already set up via
+        HA's own "Google Calendar" integration.
+        """
+        entries = self._existing_google_entries()
+        if not entries:
+            return self.async_abort(reason="no_google_account")
+        if len(entries) == 1:
+            return await self._async_use_google_entry(entries[0])
+        if user_input is not None:
+            entry = next(e for e in entries if e.entry_id == user_input["source_entry_id"])
+            return await self._async_use_google_entry(entry)
+
+        schema = vol.Schema(
+            {vol.Required("source_entry_id"): vol.In({e.entry_id: e.title for e in entries})}
+        )
+        return self.async_show_form(step_id="google", data_schema=schema)
+
+    async def _async_use_google_entry(self, google_entry: ConfigEntry) -> ConfigFlowResult:
+        await self.async_set_unique_id(f"google:{google_entry.entry_id}")
+        self._abort_if_unique_id_configured()
+        try:
+            calendars = await async_list_writable_calendars(self.hass, google_entry.entry_id)
+        except GoogleAccountNotFoundError:
+            return self.async_abort(reason="cannot_connect")
+
+        self._google_entry_id = google_entry.entry_id
+        self._google_calendars = calendars
+        return await self.async_step_google_calendar()
+
+    async def async_step_google_calendar(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Pick one or more of the Google account's writable calendars."""
+        choices = _google_calendar_choices(self._google_calendars)
+        if user_input is not None:
+            subentries: list[ConfigSubentryData] = [
+                {
+                    "subentry_type": "calendar",
+                    "title": choices[calendar_id],
+                    "unique_id": calendar_id,
+                    "data": {
+                        CONF_CALENDAR_URL: calendar_id,
+                        CONF_DISPLAY_NAME: choices[calendar_id],
+                        CONF_DEFAULT_REMINDER_MINUTES: user_input[CONF_DEFAULT_REMINDER_MINUTES],
+                        CONF_DEFAULT_REMINDER_METHOD: user_input[CONF_DEFAULT_REMINDER_METHOD],
+                        CONF_DEFAULT_TARGET: user_input[CONF_DEFAULT_TARGET],
+                    },
+                }
+                for calendar_id in user_input[CONF_CALENDAR_URL]
+            ]
+            return self.async_create_entry(
+                title="Google Calendar",
+                data={CONF_GOOGLE_ENTRY_ID: self._google_entry_id},
+                subentries=subentries,
+            )
+
+        schema = vol.Schema(
+            {
+                vol.Required(CONF_CALENDAR_URL): selector.SelectSelector(
+                    selector.SelectSelectorConfig(
+                        multiple=True,
+                        options=[
+                            selector.SelectOptionDict(value=cal_id, label=name)
+                            for cal_id, name in choices.items()
+                        ],
+                    )
+                ),
+                **_reminder_defaults_schema(reminder_methods=_GOOGLE_REMINDER_METHODS),
+            }
+        )
+        return self.async_show_form(step_id="google_calendar", data_schema=schema)
+
+
+def _is_google_entry(entry: ConfigEntry) -> bool:
+    return CONF_GOOGLE_ENTRY_ID in entry.data
+
 
 class CalendarSubentryFlow(ConfigSubentryFlow):
     """Add another calendar to an existing account, or edit one's defaults."""
 
     def __init__(self) -> None:
         self._calendars: list[caldav.Calendar] = []
+        self._google_calendars: list[GoogleCalendar] = []
 
     async def async_step_user(self, user_input: dict[str, Any] | None = None) -> SubentryFlowResult:
         """Add a new target calendar to this account."""
         entry = self._get_entry()
         already_added = {sub.data[CONF_CALENDAR_URL] for sub in entry.subentries.values()}
 
-        if not self._calendars:
-            client = build_client(
-                entry.data[CONF_URL],
-                entry.data[CONF_USERNAME],
-                entry.data[CONF_PASSWORD],
-                entry.data[CONF_VERIFY_SSL],
-            )
-            self._calendars = await self.hass.async_add_executor_job(discover_calendars, client)
-
-        choices = {
-            url: name
-            for url, name in _calendar_choices(self._calendars).items()
-            if url not in already_added
-        }
+        if _is_google_entry(entry):
+            if not self._google_calendars:
+                self._google_calendars = await async_list_writable_calendars(
+                    self.hass, entry.data[CONF_GOOGLE_ENTRY_ID]
+                )
+            choices = {
+                cal_id: name
+                for cal_id, name in _google_calendar_choices(self._google_calendars).items()
+                if cal_id not in already_added
+            }
+            reminder_methods: tuple[str, ...] = _GOOGLE_REMINDER_METHODS
+        else:
+            if not self._calendars:
+                client = build_client(
+                    entry.data[CONF_URL],
+                    entry.data[CONF_USERNAME],
+                    entry.data[CONF_PASSWORD],
+                    entry.data[CONF_VERIFY_SSL],
+                )
+                self._calendars = await self.hass.async_add_executor_job(discover_calendars, client)
+            choices = {
+                url: name
+                for url, name in _calendar_choices(self._calendars).items()
+                if url not in already_added
+            }
+            reminder_methods = (REMINDER_METHOD_POPUP, REMINDER_METHOD_NONE)
 
         if user_input is not None:
-            calendar_url = user_input[CONF_CALENDAR_URL]
-            display_name = choices[calendar_url]
+            calendar_ref = user_input[CONF_CALENDAR_URL]
+            display_name = choices[calendar_ref]
             return self.async_create_entry(
                 title=display_name,
                 data={
-                    CONF_CALENDAR_URL: calendar_url,
+                    CONF_CALENDAR_URL: calendar_ref,
                     CONF_DISPLAY_NAME: display_name,
                     CONF_DEFAULT_REMINDER_MINUTES: user_input[CONF_DEFAULT_REMINDER_MINUTES],
                     CONF_DEFAULT_REMINDER_METHOD: user_input[CONF_DEFAULT_REMINDER_METHOD],
                     CONF_DEFAULT_TARGET: user_input[CONF_DEFAULT_TARGET],
                 },
-                unique_id=calendar_url,
+                unique_id=calendar_ref,
             )
 
         schema = vol.Schema(
@@ -278,12 +397,12 @@ class CalendarSubentryFlow(ConfigSubentryFlow):
                 vol.Required(CONF_CALENDAR_URL): selector.SelectSelector(
                     selector.SelectSelectorConfig(
                         options=[
-                            selector.SelectOptionDict(value=url, label=name)
-                            for url, name in choices.items()
+                            selector.SelectOptionDict(value=ref, label=name)
+                            for ref, name in choices.items()
                         ]
                     )
                 ),
-                **_reminder_defaults_schema(),
+                **_reminder_defaults_schema(reminder_methods=reminder_methods),
             }
         )
         return self.async_show_form(step_id="user", data_schema=schema)
@@ -293,6 +412,11 @@ class CalendarSubentryFlow(ConfigSubentryFlow):
     ) -> SubentryFlowResult:
         """Edit an existing calendar's defaults (reminder minutes/method/default target)."""
         subentry = self._get_reconfigure_subentry()
+        reminder_methods = (
+            _GOOGLE_REMINDER_METHODS
+            if _is_google_entry(self._get_entry())
+            else (REMINDER_METHOD_POPUP, REMINDER_METHOD_NONE)
+        )
 
         if user_input is not None:
             return self.async_update_and_abort(
@@ -301,5 +425,7 @@ class CalendarSubentryFlow(ConfigSubentryFlow):
                 data={**subentry.data, **user_input},
             )
 
-        schema = vol.Schema(_reminder_defaults_schema(dict(subentry.data)))
+        schema = vol.Schema(
+            _reminder_defaults_schema(dict(subentry.data), reminder_methods=reminder_methods)
+        )
         return self.async_show_form(step_id="reconfigure", data_schema=schema)

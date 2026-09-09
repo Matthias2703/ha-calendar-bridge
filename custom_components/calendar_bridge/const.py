@@ -7,8 +7,11 @@ DOMAIN = "calendar_bridge"
 SERVICE_CREATE_EVENT = "create_event"
 
 CONF_CALENDAR_URL = "calendar_url"
-CONF_CALENDAR_ID = "calendar_id"
 CONF_DISPLAY_NAME = "display_name"
+
+# Stored on a Google account's top-level entry: the entry_id of the existing
+# core `google` integration whose OAuth session this account borrows.
+CONF_GOOGLE_ENTRY_ID = "google_entry_id"
 
 CONF_DEFAULT_REMINDER_MINUTES = "default_reminder_minutes"
 CONF_DEFAULT_REMINDER_METHOD = "default_reminder_method"

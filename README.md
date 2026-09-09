@@ -17,7 +17,7 @@ Calendar Bridge talks directly to the Google Calendar REST API and to CalDAV (vi
 ## Features
 
 - `calendar_bridge.create_event` service — one/multiple reminders (popup or email), recurrence (`rrule`), all-day events
-- Backends: **Google Calendar** (OAuth2, reusing Home Assistant's Application Credentials) and **CalDAV** (e.g. iCloud)
+- Backends: **Google Calendar** (reuses an existing core "Google Calendar" account's sign-in — no separate OAuth consent or Client ID/Secret) and **CalDAV** (e.g. iCloud)
 - Multiple target calendars per account via Config Subentries, each exposed as its own device for a clean device picker in the service UI
 - Optional **Home Assistant–native reminder**: send a notification (e.g. to your phone) at a configurable time before the event — independent of, or in addition to, the native Google/iOS reminder
 - Per-calendar defaults: default reminder minutes, default reminder method, and a default target calendar so `create_event` calls can omit those fields entirely
@@ -30,7 +30,7 @@ Via [HACS](https://hacs.xyz/): add this repository as a custom repository (categ
 
 Configuration happens entirely through the UI (Settings → Devices & Services → Add Integration → Calendar Bridge):
 
-1. Choose a backend: **Google** (OAuth consent, reuses an Application Credentials entry) or **CalDAV** (URL, username, password).
+1. Choose a backend: **Google** (pick one of your already-configured "Google Calendar" accounts — you must set that up first) or **CalDAV** (URL, username, password).
 2. Pick the calendar(s) you want to expose as targets — each becomes its own device.
 3. Add more calendars to an existing account later via "Add calendar" on the device card.
 

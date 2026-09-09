@@ -3,10 +3,11 @@
     "step": {
       "user": {
         "title": "Connect a calendar account",
-        "description": "CalDAV covers providers like iCloud. If you already have a CalDAV account set up in Home Assistant, reuse it to skip retyping the password. (Google Calendar support is coming in a later update.)",
+        "description": "CalDAV covers providers like iCloud. If you already have a CalDAV account set up in Home Assistant, reuse it to skip retyping the password. Google Calendar reuses your existing 'Google Calendar' integration -- no separate sign-in.",
         "menu_options": {
           "caldav_existing": "Reuse an existing CalDAV account",
-          "caldav": "Add a new CalDAV account"
+          "caldav": "Add a new CalDAV account",
+          "google": "Use an existing Google Calendar account"
         }
       },
       "caldav_existing": {
@@ -44,6 +45,32 @@
           "default_reminder_method": "How the reminder shows up inside the calendar app itself (iOS/Google), not a Home Assistant notification. Choose 'None' if you never want a reminder unless a service call explicitly asks for one.",
           "default_target": "Lets a create_event call omit the target device entirely -- it will use this calendar instead. Only one calendar should be marked as default."
         }
+      },
+      "google": {
+        "title": "Choose a Google account",
+        "description": "Pick which of your existing Google Calendar accounts to use. Its sign-in and permissions are reused as-is -- Calendar Bridge never sees your Google password.",
+        "data": {
+          "source_entry_id": "Account"
+        },
+        "data_description": {
+          "source_entry_id": "The existing Google Calendar integration whose sign-in should be reused for Calendar Bridge."
+        }
+      },
+      "google_calendar": {
+        "title": "Choose calendars",
+        "description": "Pick one or more calendars to expose as targets for the create_event service. Each becomes its own device. Read-only calendars (like Google's automatic Birthdays calendar) aren't offered here.",
+        "data": {
+          "calendar_url": "Calendars",
+          "default_reminder_minutes": "Default reminder (minutes)",
+          "default_reminder_method": "Default reminder method",
+          "default_target": "Use as default target"
+        },
+        "data_description": {
+          "calendar_url": "Every calendar you select here becomes a separate device you can target with the create_event service.",
+          "default_reminder_minutes": "Used when a create_event call doesn't specify its own reminder. Only takes effect if the method below isn't 'None'.",
+          "default_reminder_method": "How the reminder shows up inside the calendar app itself (iOS/Google), not a Home Assistant notification. Choose 'None' if you never want a reminder unless a service call explicitly asks for one.",
+          "default_target": "Lets a create_event call omit the target device entirely -- it will use this calendar instead. Only one calendar should be marked as default."
+        }
       }
     },
     "error": {
@@ -51,7 +78,8 @@
       "cannot_connect": "Could not connect to the server."
     },
     "abort": {
-      "already_configured": "This account is already configured."
+      "already_configured": "This account is already configured.",
+      "no_google_account": "No Google Calendar integration found. Set up Home Assistant's built-in 'Google Calendar' integration first, then add it here."
     }
   },
   "config_subentries": {

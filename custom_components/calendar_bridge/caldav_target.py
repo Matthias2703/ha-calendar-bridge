@@ -14,9 +14,15 @@ from typing import TYPE_CHECKING
 
 import caldav
 import icalendar
-from homeassistant.util import dt as dt_util
 
-from .target import CalendarNotFoundError, EventSpec, ReminderMethod
+from .target import (
+    DEFAULT_EVENT_DURATION,
+    CalendarNotFoundError,
+    EventSpec,
+    ReminderMethod,
+    all_day_bounds,
+    as_utc,
+)
 
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
@@ -26,11 +32,6 @@ _LOGGER = logging.getLogger(__name__)
 _ALARM_ACTION: dict[ReminderMethod, str] = {"popup": "DISPLAY", "email": "EMAIL"}
 
 _PRODID = "-//Calendar Bridge//calendar-bridge//"
-
-# RFC 5545 allows a VEVENT with no DTEND/DURATION (zero-length), but iCloud's
-# CalDAV write endpoint rejects such a PUT outright with a bare, bodyless
-# 404 -- so always send an explicit DTEND, defaulting to a 1-hour event.
-_DEFAULT_EVENT_DURATION = timedelta(hours=1)
 
 
 class CalDavAuthError(Exception):
@@ -57,35 +58,6 @@ def discover_calendars(client: caldav.DAVClient) -> list[caldav.Calendar]:
         raise CalDavAuthError from err
     except (caldav.lib.error.DAVError, OSError) as err:
         raise CalDavConnectionError from err
-
-
-def _as_utc(value: datetime | date) -> datetime | date:
-    """Normalize a datetime to UTC; pass dates (all-day events) through unchanged.
-
-    HA's `cv.datetime` returns a naive datetime when the service call's string
-    has no UTC offset -- icalendar then serializes that as a "floating" local
-    time (no Z, no TZID), which iCloud's CalDAV edge rejects outright.
-    """
-    if isinstance(value, datetime):
-        return dt_util.as_utc(value)
-    return value
-
-
-def _as_date(value: datetime | date) -> date:
-    return value.date() if isinstance(value, datetime) else value
-
-
-def _all_day_bounds(start: datetime | date, end: datetime | date | None) -> tuple[date, date]:
-    """Compute the DTSTART/DTEND dates for an all-day event.
-
-    RFC 5545 all-day DTEND is exclusive -- a single-day event needs
-    DTEND = DTSTART + 1 day, not DTEND == DTSTART.
-    """
-    start_date = _as_date(start)
-    end_date = _as_date(end) if end is not None else start_date
-    if end_date <= start_date:
-        end_date = start_date + timedelta(days=1)
-    return start_date, end_date
 
 
 class CalDavCalendarTarget:
@@ -175,7 +147,7 @@ class CalDavCalendarTarget:
         if calendar is None:
             return False
 
-        start_dt = _as_utc(
+        start_dt = as_utc(
             start if isinstance(start, datetime) else datetime.combine(start, datetime.min.time())
         )
         window = timedelta(hours=1)
@@ -280,13 +252,13 @@ class CalDavCalendarTarget:
         event.add("summary", spec.summary)
         event.add("dtstamp", datetime.now(UTC))
         if spec.all_day:
-            start_date, end_date = _all_day_bounds(spec.start, spec.end)
+            start_date, end_date = all_day_bounds(spec.start, spec.end)
             event.add("dtstart", start_date)
             event.add("dtend", end_date)
         else:
-            start = _as_utc(spec.start)
+            start = as_utc(spec.start)
             event.add("dtstart", start)
-            end = _as_utc(spec.end) if spec.end is not None else start + _DEFAULT_EVENT_DURATION
+            end = as_utc(spec.end) if spec.end is not None else start + DEFAULT_EVENT_DURATION
             event.add("dtend", end)
         if spec.description:
             event.add("description", spec.description)
