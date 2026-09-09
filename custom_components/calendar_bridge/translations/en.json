@@ -118,6 +118,9 @@
             "default_target": "Lets a create_event call omit the target device entirely -- it will use this calendar instead. Only one calendar should be marked as default."
           }
         }
+      },
+      "abort": {
+        "reconfigure_successful": "Calendar defaults updated."
       }
     }
   },

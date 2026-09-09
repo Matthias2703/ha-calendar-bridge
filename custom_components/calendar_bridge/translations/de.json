@@ -118,6 +118,9 @@
             "default_target": "Erlaubt es, beim create_event-Aufruf das Ziel-Gerät ganz wegzulassen -- dann wird dieser Kalender verwendet. Es sollte immer nur ein Kalender als Standard markiert sein."
           }
         }
+      },
+      "abort": {
+        "reconfigure_successful": "Kalender-Defaults aktualisiert."
       }
     }
   },
