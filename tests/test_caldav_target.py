@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from unittest.mock import MagicMock, patch
 
 import icalendar
@@ -263,3 +263,97 @@ async def test_missing_calendar_raises_calendar_not_found():
         pytest.raises(CalendarNotFoundError),
     ):
         await target.async_create_event("https://example.test/cal/", spec)
+
+
+def _mock_caldav_event(summary: str, has_alarm: bool) -> MagicMock:
+    """A mock CalendarObjectResource wrapping a real icalendar.Event."""
+    component = icalendar.Event()
+    component.add("summary", summary)
+    if has_alarm:
+        alarm = icalendar.Alarm()
+        alarm.add("action", "DISPLAY")
+        alarm.add("trigger", timedelta(minutes=-30))
+        component.add_component(alarm)
+    mock_event = MagicMock()
+    mock_event.icalendar_component = component
+    return mock_event
+
+
+@pytest.mark.asyncio
+async def test_backfill_adds_reminder_to_matching_event_without_one():
+    target = _make_target()
+    calendar_ref = "https://example.test/cal/"
+    mock_client, mock_calendar = _mock_client_with_calendar(calendar_ref)
+    mock_event = _mock_caldav_event("Native Termin", has_alarm=False)
+    mock_calendar.date_search.return_value = [mock_event]
+
+    with patch(
+        "custom_components.calendar_bridge.caldav_target.build_client", return_value=mock_client
+    ):
+        patched = await target.async_backfill_reminder(
+            calendar_ref, "Native Termin", datetime(2026, 10, 1, 9, 0, tzinfo=UTC), 30, "popup"
+        )
+
+    assert patched is True
+    mock_event.save.assert_called_once()
+    alarms = list(mock_event.icalendar_component.walk("VALARM"))
+    assert len(alarms) == 1
+    assert str(alarms[0]["action"]) == "DISPLAY"
+
+
+@pytest.mark.asyncio
+async def test_backfill_skips_event_that_already_has_a_reminder():
+    target = _make_target()
+    calendar_ref = "https://example.test/cal/"
+    mock_client, mock_calendar = _mock_client_with_calendar(calendar_ref)
+    mock_event = _mock_caldav_event("Native Termin", has_alarm=True)
+    mock_calendar.date_search.return_value = [mock_event]
+
+    with patch(
+        "custom_components.calendar_bridge.caldav_target.build_client", return_value=mock_client
+    ):
+        patched = await target.async_backfill_reminder(
+            calendar_ref, "Native Termin", datetime(2026, 10, 1, 9, 0, tzinfo=UTC), 30, "popup"
+        )
+
+    assert patched is False
+    mock_event.save.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_backfill_ignores_event_with_a_different_summary():
+    target = _make_target()
+    calendar_ref = "https://example.test/cal/"
+    mock_client, mock_calendar = _mock_client_with_calendar(calendar_ref)
+    mock_event = _mock_caldav_event("Some Other Event", has_alarm=False)
+    mock_calendar.date_search.return_value = [mock_event]
+
+    with patch(
+        "custom_components.calendar_bridge.caldav_target.build_client", return_value=mock_client
+    ):
+        patched = await target.async_backfill_reminder(
+            calendar_ref, "Native Termin", datetime(2026, 10, 1, 9, 0, tzinfo=UTC), 30, "popup"
+        )
+
+    assert patched is False
+    mock_event.save.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_backfill_returns_false_when_calendar_not_found():
+    target = _make_target()
+    mock_client = MagicMock()
+    mock_client.principal.return_value.calendars.return_value = []
+
+    with patch(
+        "custom_components.calendar_bridge.caldav_target.build_client", return_value=mock_client
+    ):
+        patched = await target.async_backfill_reminder(
+            "https://example.test/cal/",
+            "Native Termin",
+            datetime(2026, 10, 1, 9, 0, tzinfo=UTC),
+            30,
+            "popup",
+        )
+
+    assert patched is False

@@ -7,6 +7,7 @@ simple alarm — it can't express multiple reminders, an EMAIL alarm, or RRULE.
 
 from __future__ import annotations
 
+import logging
 import uuid
 from datetime import UTC, date, datetime, timedelta
 from typing import TYPE_CHECKING
@@ -19,6 +20,8 @@ from .target import CalendarNotFoundError, EventSpec, ReminderMethod
 
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
+
+_LOGGER = logging.getLogger(__name__)
 
 _ALARM_ACTION: dict[ReminderMethod, str] = {"popup": "DISPLAY", "email": "EMAIL"}
 
@@ -134,6 +137,61 @@ class CalDavCalendarTarget:
                 calendar.save_event(ical_text)
                 return
         raise CalendarNotFoundError(calendar_ref)
+
+    async def async_backfill_reminder(
+        self,
+        calendar_ref: str,
+        summary: str,
+        start: datetime | date,
+        minutes_before: int,
+        method: ReminderMethod,
+    ) -> bool:
+        """Add a default reminder to a matching event that has none.
+
+        Backfills a real VALARM onto an event created through HA's own
+        `calendar.create_event` (which has no reminder field at all -- the
+        whole reason this integration exists) or anything else that writes
+        to this calendar without going through `calendar_bridge.create_event`.
+        """
+        return await self._hass.async_add_executor_job(
+            self._backfill_reminder, calendar_ref, summary, start, minutes_before, method
+        )
+
+    def _backfill_reminder(
+        self,
+        calendar_ref: str,
+        summary: str,
+        start: datetime | date,
+        minutes_before: int,
+        method: ReminderMethod,
+    ) -> bool:
+        client = build_client(self._url, self._username, self._password, self._verify_ssl)
+        target = calendar_ref.rstrip("/")
+        calendar = None
+        for cal in client.principal().calendars():  # type: ignore[no-untyped-call]
+            if str(cal.url).rstrip("/") == target:
+                calendar = cal
+                break
+        if calendar is None:
+            return False
+
+        start_dt = _as_utc(
+            start if isinstance(start, datetime) else datetime.combine(start, datetime.min.time())
+        )
+        window = timedelta(hours=1)
+        events = calendar.date_search(start_dt - window, start_dt + window)
+        for event in events:
+            component = event.icalendar_component
+            if str(component.get("summary", "")) != summary:
+                continue
+            if list(component.walk("VALARM")):
+                continue  # already has a reminder
+            component.add_component(self._build_alarm(summary, method, minutes_before))
+            event.save()
+            _LOGGER.info("Backfilled a %s reminder onto '%s'", method, summary)
+            return True
+        _LOGGER.debug("No matching reminder-less event found for '%s' to backfill", summary)
+        return False
 
     def _build_ical(self, spec: EventSpec) -> tuple[str, str]:
         # Plain UUID, no "@calendar-bridge" suffix: the UID also becomes the
