@@ -102,6 +102,18 @@
       }
     }
   },
+  "entity": {
+    "switch": {
+      "automatic_reminder": {
+        "name": "Automatic reminder"
+      }
+    },
+    "number": {
+      "reminder_minutes": {
+        "name": "Reminder lead time"
+      }
+    }
+  },
   "exceptions": {
     "device_not_found": {
       "message": "Device {device_id} is not a Calendar Bridge calendar."

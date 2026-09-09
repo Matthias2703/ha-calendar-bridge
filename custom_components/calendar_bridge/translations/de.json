@@ -102,6 +102,18 @@
       }
     }
   },
+  "entity": {
+    "switch": {
+      "automatic_reminder": {
+        "name": "Automatische Erinnerung"
+      }
+    },
+    "number": {
+      "reminder_minutes": {
+        "name": "Erinnerungsvorlauf"
+      }
+    }
+  },
   "exceptions": {
     "device_not_found": {
       "message": "Gerät {device_id} ist kein Calendar-Bridge-Kalender."

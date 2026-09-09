@@ -272,3 +272,17 @@ Das ist die erste echte Bestätigung des ursprünglich vom Nutzer gewünschten V
 **Unverändert bestehender, unabhängiger Blocker**: Der Core-`caldav`-Timeout (`Unknown error` / `TimeoutError` im HTTP/3-Stack, siehe vorheriges Update) trat während dieser Verifikation weiterhin intermittierend auf (mehrere Fehlversuche vor jedem erfolgreichen Anlegen) — Ursache weiterhin außerhalb dieses Repos (HA-Core-`caldav`-Integration).
 
 Reste im Kalender zum späteren manuellen Aufräumen: `test`, `Debug Verify Test`, `Retry Fix Test`, `Poll Verify Test` — alle im „Privat"-Kalender, alle inzwischen mit Reminder versehen (nicht mehr reminder-los, also für den `SeenEventsTracker` irrelevant, aber weiterhin sichtbarer Kalender-Ballast aus dieser Debugging-Session).
+
+## Update 2026-09-09 (Fortsetzung 6): Erinnerung ein/aus + Vorlaufzeit als echte Geräte-Entities
+
+Der Nutzer bemängelte auf der Geräteseite eines Kalenders (`Einstellungen → Geräte → Privat`) zweierlei: die „Aktivität"-Kachel zeigte nichts an, und es gab keine Möglichkeit, die automatische Erinnerung direkt dort ein-/auszuschalten oder die Vorlaufzeit zu setzen — beides sollte pro Kalender steuerbar sein.
+
+Beides hing zusammen: „Aktivität" ist HAs eingebautes Protokoll für Zustandsänderungen von *Entities* eines Geräts — Calendar Bridge hatte laut ursprünglicher Architekturentscheidung ("liest nichts und legt keine neuen Entities an") bewusst keine, also gab es dort strukturell nie etwas zu zeigen. Rückfrage an den Nutzer (Event-Listener durch Entities ergänzen oder nur auf den bestehenden Config-Dialog verweisen?) → „Ja, Switch + Number-Entity pro Kalender anlegen".
+
+**Neue Dateien**: `switch.py` (`CalendarBridgeReminderSwitch`) und `number.py` (`CalendarBridgeReminderMinutes`), je eine Entity pro Kalender-Subentry, verknüpft über `config_subentry_id` (API-Signatur `async_add_entities(entities, config_subentry_id=...)` direkt im aktuellen `home-assistant/core`-Quellcode verifiziert, da der lokale Stub 2025.1.4 noch keine Subentries kennt). Beide Entities lesen/schreiben direkt die bestehenden Subentry-Felder `default_reminder_method`/`default_reminder_minutes` über `hass.config_entries.async_update_subentry(entry, subentry, data={...})` — **kein neuer, paralleler Zustand**, sondern derselbe Wert, den auch der „Kalender-Defaults bearbeiten"-Dialog und der Poller/Listener aus Fortsetzung 5 lesen. Da CalDAV-Ziele nur `popup`/`none` als Methode anbieten (siehe Fortsetzung 3), ist die Switch-Logik eindeutig: an = `popup`, aus = `none`.
+
+Beide Entities abonnieren `entry.add_update_listener(...)`, das laut `homeassistant/config_entries.py` bei jeder erfolgreichen `async_update_subentry`-Änderung feuert — Änderungen über den alten Reconfigure-Dialog und über die neuen Entities bleiben so gegenseitig synchron, ohne eigene Zwischenspeicherung.
+
+`__init__.py` bekam `PLATFORMS = [Platform.SWITCH, Platform.NUMBER]` plus `async_forward_entry_setups`/`async_unload_platforms` in `async_setup_entry`/`async_unload_entry`. Übersetzungsnamen ("Automatische Erinnerung", "Erinnerungsvorlauf") in `strings.json` und beiden `translations/*.json` ergänzt.
+
+**Live verifiziert**: Nach Deploy + Neustart erschienen auf der Geräteseite von „Privat" unter „Steuerung" der Schalter (an, da `default_reminder_method=popup`) und das Zahlenfeld (60 Min., der konfigurierte Wert). Schalter aus- und wieder eingeschaltet — beide Wechsel erschienen sofort in „Aktivität" inklusive Zeitstempel und ausführendem Nutzer, das ursprünglich bemängelte leere Aktivitätsprotokoll ist damit ebenfalls gelöst.

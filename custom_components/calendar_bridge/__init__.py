@@ -15,6 +15,7 @@ from homeassistant.const import (
     CONF_USERNAME,
     CONF_VERIFY_SSL,
     EVENT_CALL_SERVICE,
+    Platform,
 )
 from homeassistant.core import Event, HomeAssistant, ServiceCall, ServiceResponse, SupportsResponse
 from homeassistant.helpers import config_validation as cv
@@ -61,6 +62,8 @@ _BACKFILL_RETRY_DELAYS = (3, 5, 10, 15, 15)
 # through any HA event or service call.
 _POLL_INTERVAL = timedelta(seconds=60)
 _POLL_LOOKAHEAD = timedelta(days=365)
+
+PLATFORMS: list[Platform] = [Platform.SWITCH, Platform.NUMBER]
 
 type CalendarBridgeConfigEntry = ConfigEntry[CalDavCalendarTarget]
 
@@ -175,9 +178,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: CalendarBridgeConfigEntr
     for subentry_id, subentry in entry.subentries.items():
         async_create_or_update_device(hass, entry, subentry_id, subentry.data[CONF_DISPLAY_NAME])
 
+    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     return True
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: CalendarBridgeConfigEntry) -> bool:
     """Unload a config entry."""
-    return True
+    return await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
