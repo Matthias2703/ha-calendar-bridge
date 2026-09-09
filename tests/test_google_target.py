@@ -237,7 +237,11 @@ async def test_poll_treats_separate_instances_of_a_recurring_uid_as_distinct():
             _CALENDAR_REF, {"evt-instance-1"}, 30, "popup", _LOOKAHEAD, False
         )
 
-    assert seen == {"evt-instance-1", "evt-instance-2"}
+    # Only this poll's own findings are returned (the caller merges them into
+    # its persisted baseline) -- instance-2 is neither in known_uids nor
+    # already-reminded, so it's treated as new and backfilled, proving the
+    # shared iCalUID from instance-1 didn't cause it to be skipped.
+    assert seen == {"evt-instance-2"}
     service.async_patch_event.assert_awaited_once()
 
 
