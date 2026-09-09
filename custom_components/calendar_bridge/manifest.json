@@ -7,6 +7,6 @@
   "integration_type": "service",
   "iot_class": "cloud_push",
   "issue_tracker": "https://github.com/Matthias2703/ha-calendar-bridge/issues",
-  "requirements": ["icalendar==7.3.0", "caldav==3.3.0"],
+  "requirements": ["icalendar==6.3.1", "caldav==2.1.0"],
   "version": "0.1.0"
 }

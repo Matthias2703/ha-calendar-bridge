@@ -1,0 +1,42 @@
+create_event:
+  target:
+    device:
+      integration: calendar_bridge
+  fields:
+    summary:
+      required: true
+      selector:
+        text:
+    start:
+      required: true
+      selector:
+        datetime:
+    end:
+      selector:
+        datetime:
+    all_day:
+      selector:
+        boolean:
+    description:
+      selector:
+        text:
+          multiline: true
+    location:
+      selector:
+        text:
+    reminder_minutes:
+      selector:
+        number:
+          min: 0
+          max: 40320
+          mode: box
+          unit_of_measurement: minutes
+    reminders:
+      selector:
+        object:
+    rrule:
+      selector:
+        text:
+    notify:
+      selector:
+        object:

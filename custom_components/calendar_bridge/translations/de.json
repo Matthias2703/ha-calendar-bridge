@@ -2,8 +2,155 @@
   "config": {
     "step": {
       "user": {
-        "title": "Calendar Bridge",
-        "description": "Wähle das Kalender-Backend, das du verbinden möchtest."
+        "title": "Kalender-Konto verbinden",
+        "description": "CalDAV deckt Anbieter wie iCloud ab. Falls du bereits ein CalDAV-Konto in Home Assistant eingerichtet hast, kannst du es wiederverwenden, statt das Passwort erneut einzugeben. (Google Kalender folgt in einem späteren Update.)",
+        "menu_options": {
+          "caldav_existing": "Bestehendes CalDAV-Konto wiederverwenden",
+          "caldav": "Neues CalDAV-Konto hinzufügen"
+        }
+      },
+      "caldav_existing": {
+        "title": "Bestehendes CalDAV-Konto wiederverwenden",
+        "description": "Nutzt die für dieses Konto bereits gespeicherten Zugangsdaten -- nichts erneut eintippen.",
+        "data": {
+          "source_entry_id": "Konto"
+        },
+        "data_description": {
+          "source_entry_id": "Die bestehende CalDAV-Integration, deren URL/Benutzername/Passwort für Calendar Bridge wiederverwendet werden soll."
+        }
+      },
+      "caldav": {
+        "title": "CalDAV-Konto verbinden",
+        "description": "z. B. iCloud (https://caldav.icloud.com). Nutze ein App-spezifisches Passwort, falls dein Anbieter das verlangt.",
+        "data": {
+          "url": "Server-URL",
+          "username": "Benutzername",
+          "password": "Passwort",
+          "verify_ssl": "SSL-Zertifikat prüfen"
+        }
+      },
+      "caldav_calendar": {
+        "title": "Kalender auswählen",
+        "description": "Wähle einen oder mehrere Kalender aus, die als Ziele für den create_event-Dienst bereitgestellt werden sollen. Jeder wird zu einem eigenen Gerät. Weitere kannst du später über die Geräteseite des Kontos hinzufügen.",
+        "data": {
+          "calendar_url": "Kalender",
+          "default_reminder_minutes": "Standard-Erinnerung (Minuten)",
+          "default_reminder_method": "Standard-Erinnerungsmethode",
+          "default_target": "Als Standard-Ziel verwenden"
+        },
+        "data_description": {
+          "calendar_url": "Jeder hier ausgewählte Kalender wird zu einem eigenen Gerät, das du beim create_event-Dienst als Ziel auswählen kannst.",
+          "default_reminder_minutes": "Wird verwendet, wenn ein create_event-Aufruf keine eigene Erinnerung angibt. Wirkt nur, wenn die Methode unten nicht 'Keine' ist.",
+          "default_reminder_method": "Wie die Erinnerung im Kalender selbst erscheint (iOS/Google) -- keine Home-Assistant-Benachrichtigung. Wähle 'Keine', wenn du nie eine Erinnerung willst, außer ein Service-Aufruf fragt explizit danach.",
+          "default_target": "Erlaubt es, beim create_event-Aufruf das Ziel-Gerät ganz wegzulassen -- dann wird dieser Kalender verwendet. Es sollte immer nur ein Kalender als Standard markiert sein."
+        }
+      }
+    },
+    "error": {
+      "invalid_auth": "Authentifizierung fehlgeschlagen. Prüfe Benutzername/Passwort.",
+      "cannot_connect": "Verbindung zum Server nicht möglich."
+    },
+    "abort": {
+      "already_configured": "Dieses Konto ist bereits konfiguriert."
+    }
+  },
+  "config_subentries": {
+    "calendar": {
+      "entry_type": "Kalender",
+      "step": {
+        "user": {
+          "title": "Kalender hinzufügen",
+          "description": "Wähle einen weiteren Kalender dieses Kontos, der als Ziel bereitgestellt werden soll.",
+          "data": {
+            "calendar_url": "Kalender",
+            "default_reminder_minutes": "Standard-Erinnerung (Minuten)",
+            "default_reminder_method": "Standard-Erinnerungsmethode",
+            "default_target": "Als Standard-Ziel verwenden"
+          },
+          "data_description": {
+            "default_reminder_minutes": "Wird verwendet, wenn ein create_event-Aufruf keine eigene Erinnerung angibt. Wirkt nur, wenn die Methode unten nicht 'Keine' ist.",
+            "default_reminder_method": "Wie die Erinnerung im Kalender selbst erscheint (iOS/Google) -- keine Home-Assistant-Benachrichtigung. Wähle 'Keine', wenn du nie eine Erinnerung willst, außer ein Service-Aufruf fragt explizit danach.",
+            "default_target": "Erlaubt es, beim create_event-Aufruf das Ziel-Gerät ganz wegzulassen -- dann wird dieser Kalender verwendet. Es sollte immer nur ein Kalender als Standard markiert sein."
+          }
+        },
+        "reconfigure": {
+          "title": "Kalender-Defaults bearbeiten",
+          "data": {
+            "default_reminder_minutes": "Standard-Erinnerung (Minuten)",
+            "default_reminder_method": "Standard-Erinnerungsmethode",
+            "default_target": "Als Standard-Ziel verwenden"
+          },
+          "data_description": {
+            "default_reminder_minutes": "Wird verwendet, wenn ein create_event-Aufruf keine eigene Erinnerung angibt. Wirkt nur, wenn die Methode unten nicht 'Keine' ist.",
+            "default_reminder_method": "Wie die Erinnerung im Kalender selbst erscheint (iOS/Google) -- keine Home-Assistant-Benachrichtigung. Wähle 'Keine', wenn du nie eine Erinnerung willst, außer ein Service-Aufruf fragt explizit danach.",
+            "default_target": "Erlaubt es, beim create_event-Aufruf das Ziel-Gerät ganz wegzulassen -- dann wird dieser Kalender verwendet. Es sollte immer nur ein Kalender als Standard markiert sein."
+          }
+        }
+      }
+    }
+  },
+  "selector": {
+    "reminder_method": {
+      "options": {
+        "popup": "Popup",
+        "email": "E-Mail",
+        "none": "Keine -- standardmäßig keine Erinnerung setzen"
+      }
+    }
+  },
+  "exceptions": {
+    "device_not_found": {
+      "message": "Gerät {device_id} ist kein Calendar-Bridge-Kalender."
+    },
+    "no_target": {
+      "message": "Es wurde kein Ziel-Kalender angegeben und kein Standard-Ziel konfiguriert. Gib ein Gerät an oder markiere einen Kalender als Standard-Ziel."
+    }
+  },
+  "services": {
+    "create_event": {
+      "name": "Termin erstellen",
+      "description": "Erstellt einen Kalendertermin mit einer echten Erinnerung/Alarm und optional einer Wiederholungsregel.",
+      "fields": {
+        "summary": {
+          "name": "Titel",
+          "description": "Titel des Termins."
+        },
+        "start": {
+          "name": "Beginn",
+          "description": "Start-Datum/-Zeit des Termins."
+        },
+        "end": {
+          "name": "Ende",
+          "description": "End-Datum/-Zeit des Termins."
+        },
+        "all_day": {
+          "name": "Ganztägig",
+          "description": "Ob es sich um einen ganztägigen Termin handelt."
+        },
+        "description": {
+          "name": "Beschreibung",
+          "description": "Beschreibung/Notizen zum Termin."
+        },
+        "location": {
+          "name": "Ort",
+          "description": "Ort des Termins."
+        },
+        "reminder_minutes": {
+          "name": "Erinnerung (Minuten)",
+          "description": "Minuten vor dem Termin für eine einzelne Popup-Erinnerung. Wird ignoriert, falls 'reminders' gesetzt ist."
+        },
+        "reminders": {
+          "name": "Erinnerungen",
+          "description": "Liste von bis zu 5 Erinnerungen, je {method: popup|email, minutes_before: Minuten}."
+        },
+        "rrule": {
+          "name": "Wiederholungsregel",
+          "description": "Eine RFC-5545-RRULE, z. B. 'FREQ=YEARLY'."
+        },
+        "notify": {
+          "name": "Benachrichtigungs-Erinnerung",
+          "description": "Zusätzlich eine Home-Assistant-Benachrichtigung vor dem Termin senden, unabhängig von der Kalender-eigenen Erinnerung: {target: Notify-Entity, minutes_before: Minuten, message: optionaler Text}."
+        }
       }
     }
   }

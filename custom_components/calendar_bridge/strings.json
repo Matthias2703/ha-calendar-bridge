@@ -2,8 +2,155 @@
   "config": {
     "step": {
       "user": {
-        "title": "Calendar Bridge",
-        "description": "Choose which calendar backend you want to connect."
+        "title": "Connect a calendar account",
+        "description": "CalDAV covers providers like iCloud. If you already have a CalDAV account set up in Home Assistant, reuse it to skip retyping the password. (Google Calendar support is coming in a later update.)",
+        "menu_options": {
+          "caldav_existing": "Reuse an existing CalDAV account",
+          "caldav": "Add a new CalDAV account"
+        }
+      },
+      "caldav_existing": {
+        "title": "Reuse an existing CalDAV account",
+        "description": "Uses the credentials already stored for that account -- nothing to retype.",
+        "data": {
+          "source_entry_id": "Account"
+        },
+        "data_description": {
+          "source_entry_id": "The existing CalDAV integration whose URL/username/password should be reused for Calendar Bridge."
+        }
+      },
+      "caldav": {
+        "title": "Connect a CalDAV account",
+        "description": "e.g. iCloud (https://caldav.icloud.com). Use an app-specific password if your provider requires one.",
+        "data": {
+          "url": "Server URL",
+          "username": "Username",
+          "password": "Password",
+          "verify_ssl": "Verify SSL certificate"
+        }
+      },
+      "caldav_calendar": {
+        "title": "Choose calendars",
+        "description": "Pick one or more calendars to expose as targets for the create_event service. Each becomes its own device. You can add more later from the account's device page.",
+        "data": {
+          "calendar_url": "Calendars",
+          "default_reminder_minutes": "Default reminder (minutes)",
+          "default_reminder_method": "Default reminder method",
+          "default_target": "Use as default target"
+        },
+        "data_description": {
+          "calendar_url": "Every calendar you select here becomes a separate device you can target with the create_event service.",
+          "default_reminder_minutes": "Used when a create_event call doesn't specify its own reminder. Only takes effect if the method below isn't 'None'.",
+          "default_reminder_method": "How the reminder shows up inside the calendar app itself (iOS/Google), not a Home Assistant notification. Choose 'None' if you never want a reminder unless a service call explicitly asks for one.",
+          "default_target": "Lets a create_event call omit the target device entirely -- it will use this calendar instead. Only one calendar should be marked as default."
+        }
+      }
+    },
+    "error": {
+      "invalid_auth": "Authentication failed. Check your username/password.",
+      "cannot_connect": "Could not connect to the server."
+    },
+    "abort": {
+      "already_configured": "This account is already configured."
+    }
+  },
+  "config_subentries": {
+    "calendar": {
+      "entry_type": "Calendar",
+      "step": {
+        "user": {
+          "title": "Add a calendar",
+          "description": "Pick another calendar from this account to expose as a target.",
+          "data": {
+            "calendar_url": "Calendar",
+            "default_reminder_minutes": "Default reminder (minutes)",
+            "default_reminder_method": "Default reminder method",
+            "default_target": "Use as default target"
+          },
+          "data_description": {
+            "default_reminder_minutes": "Used when a create_event call doesn't specify its own reminder. Only takes effect if the method below isn't 'None'.",
+            "default_reminder_method": "How the reminder shows up inside the calendar app itself (iOS/Google), not a Home Assistant notification. Choose 'None' if you never want a reminder unless a service call explicitly asks for one.",
+            "default_target": "Lets a create_event call omit the target device entirely -- it will use this calendar instead. Only one calendar should be marked as default."
+          }
+        },
+        "reconfigure": {
+          "title": "Edit calendar defaults",
+          "data": {
+            "default_reminder_minutes": "Default reminder (minutes)",
+            "default_reminder_method": "Default reminder method",
+            "default_target": "Use as default target"
+          },
+          "data_description": {
+            "default_reminder_minutes": "Used when a create_event call doesn't specify its own reminder. Only takes effect if the method below isn't 'None'.",
+            "default_reminder_method": "How the reminder shows up inside the calendar app itself (iOS/Google), not a Home Assistant notification. Choose 'None' if you never want a reminder unless a service call explicitly asks for one.",
+            "default_target": "Lets a create_event call omit the target device entirely -- it will use this calendar instead. Only one calendar should be marked as default."
+          }
+        }
+      }
+    }
+  },
+  "selector": {
+    "reminder_method": {
+      "options": {
+        "popup": "Popup",
+        "email": "Email",
+        "none": "None -- don't set a reminder by default"
+      }
+    }
+  },
+  "exceptions": {
+    "device_not_found": {
+      "message": "Device {device_id} is not a Calendar Bridge calendar."
+    },
+    "no_target": {
+      "message": "No target calendar was given and no default target is configured. Pass a device or mark a calendar as the default target."
+    }
+  },
+  "services": {
+    "create_event": {
+      "name": "Create event",
+      "description": "Creates a calendar event with a real reminder/alarm and, optionally, a recurrence rule.",
+      "fields": {
+        "summary": {
+          "name": "Summary",
+          "description": "Event title."
+        },
+        "start": {
+          "name": "Start",
+          "description": "Event start date/time."
+        },
+        "end": {
+          "name": "End",
+          "description": "Event end date/time."
+        },
+        "all_day": {
+          "name": "All day",
+          "description": "Whether this is an all-day event."
+        },
+        "description": {
+          "name": "Description",
+          "description": "Event description/notes."
+        },
+        "location": {
+          "name": "Location",
+          "description": "Event location."
+        },
+        "reminder_minutes": {
+          "name": "Reminder minutes",
+          "description": "Minutes before the event to show a single popup reminder. Ignored if 'reminders' is set."
+        },
+        "reminders": {
+          "name": "Reminders",
+          "description": "List of up to 5 reminders, each {method: popup|email, minutes_before: number}."
+        },
+        "rrule": {
+          "name": "Recurrence rule",
+          "description": "An RFC 5545 RRULE, e.g. 'FREQ=YEARLY'."
+        },
+        "notify": {
+          "name": "Notification reminder",
+          "description": "Also send a Home Assistant notification before the event, independent of the calendar's own reminder: {target: notify entity, minutes_before: number, message: optional text}."
+        }
       }
     }
   }

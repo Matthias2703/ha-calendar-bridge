@@ -8,6 +8,7 @@ build/
 .venv/
 venv/
 .env
+.devref/
 
 .pytest_cache/
 .mypy_cache/
@@ -20,3 +21,4 @@ htmlcov/
 
 .vscode/
 .idea/
+.claude/
