@@ -1,13 +1,13 @@
 {
   "domain": "calendar_bridge",
   "name": "Calendar Bridge",
+  "after_dependencies": ["google"],
   "codeowners": ["@Matthias2703"],
   "config_flow": true,
   "documentation": "https://github.com/Matthias2703/ha-calendar-bridge",
   "integration_type": "service",
   "iot_class": "cloud_polling",
   "issue_tracker": "https://github.com/Matthias2703/ha-calendar-bridge/issues",
-  "after_dependencies": ["google"],
   "requirements": ["icalendar==6.3.1", "caldav==2.1.0", "gcal-sync==9.1.1"],
   "version": "0.1.0"
 }

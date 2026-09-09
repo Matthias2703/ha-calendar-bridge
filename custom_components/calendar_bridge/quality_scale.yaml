@@ -1,0 +1,140 @@
+rules:
+  # Bronze
+  action-setup: done
+  appropriate-polling: done
+  brands: done
+  common-modules:
+    status: exempt
+    comment: |
+      No coordinator/base-entity module needed — switch/number read the
+      subentry data directly, and the two calendar targets already share
+      their common logic via the CalendarTarget protocol in target.py.
+  config-flow: done
+  config-flow-test-coverage:
+    status: todo
+    comment: |
+      config_flow.py has no dedicated tests yet (0% coverage) — the plan
+      called for test_config_flow_google/caldav/reauth/test_config_subentry_flow.py,
+      none of which exist. Manual live verification only so far.
+  dependency-transparency: done
+  docs-actions: done
+  docs-high-level-description: done
+  docs-installation-instructions: done
+  docs-removal-instructions:
+    status: todo
+    comment: |
+      README has no explicit "how to remove this integration" section.
+  entity-event-setup: done
+  entity-unique-id: done
+  has-entity-name: done
+  runtime-data: done
+  test-before-configure:
+    status: todo
+    comment: |
+      CalDAV config flow does not yet call principal().calendars() before
+      creating the entry to fail fast with cannot_connect/invalid_auth.
+  test-before-setup:
+    status: todo
+    comment: |
+      async_setup_entry does not verify the CalDAV/Google connection before
+      completing setup.
+  unique-config-entry: done
+
+  # Silver
+  action-exceptions: done
+  config-entry-unloading: done
+  docs-configuration-parameters: done
+  docs-installation-parameters: done
+  entity-unavailable:
+    status: exempt
+    comment: |
+      switch/number entities mirror config data, not a live connection —
+      there is no "unavailable" state to represent.
+  integration-owner: done
+  log-when-unavailable:
+    status: exempt
+    comment: |
+      No coordinator/polling connection whose failures need logging —
+      create_event failures already raise translated exceptions.
+  parallel-updates:
+    status: exempt
+    comment: |
+      Not coordinator-based; each create_event call is independent and
+      Home Assistant already serializes service calls to one entity/device.
+  reauthentication-flow:
+    status: todo
+    comment: |
+      Planned (ConfigEntryAuthFailed for Google, 401 refresh form for CalDAV)
+      but not implemented yet — a token/password error currently just fails.
+  test-coverage:
+    status: todo
+    comment: |
+      CI coverage gate is 45%, not the Silver target of 95%. config_flow.py,
+      services.py, __init__.py, switch.py and number.py are largely untested;
+      only caldav_target.py/google_target.py are well covered.
+
+  # Gold (not targeted yet — recorded honestly per the project's own plan)
+  devices: done
+  diagnostics:
+    status: todo
+    comment: |
+      Planned (diagnostics.py, redacting tokens/passwords) but not built.
+  discovery:
+    status: exempt
+    comment: |
+      Connects to a user's existing cloud account (Google/CalDAV) or
+      arbitrary CalDAV server — nothing on the network to discover.
+  discovery-update-info:
+    status: exempt
+    comment: |
+      Same reasoning as discovery.
+  docs-data-update:
+    status: exempt
+    comment: |
+      Service-only integration; there is no data update cycle to document
+      beyond the reminder-backfill poller, which is covered under Features.
+  docs-examples: done
+  docs-known-limitations: done
+  docs-supported-devices:
+    status: exempt
+    comment: |
+      Not a device-integration; devices here represent calendars, not
+      physical/vendor hardware with a support matrix.
+  docs-supported-functions: done
+  docs-troubleshooting: todo
+  docs-use-cases: done
+  dynamic-devices: done
+  entity-category: done
+  entity-device-class:
+    status: exempt
+    comment: |
+      switch/number are configuration controls, not measurements — no
+      applicable device class.
+  entity-disabled-by-default:
+    status: exempt
+    comment: |
+      Both entities (reminder switch, reminder minutes) are core controls
+      for the integration's purpose, not optional/noisy ones.
+  entity-translations: done
+  exception-translations: done
+  icon-translations:
+    status: todo
+    comment: |
+      icons.json from the original file layout plan was never created;
+      entities/services use default icons.
+  reconfiguration-flow: done
+  repair-issues:
+    status: exempt
+    comment: |
+      No case identified yet where a persistent repair issue (rather than
+      a translated exception at call time) would be the right UX.
+  stale-devices:
+    status: todo
+    comment: |
+      A calendar deleted upstream isn't automatically flagged/removed from
+      the device registry.
+
+  # Platinum
+  async-dependency: done
+  inject-websession: done
+  strict-typing: done

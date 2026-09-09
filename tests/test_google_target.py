@@ -6,6 +6,7 @@ from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
 from typing import Any
 from unittest.mock import AsyncMock, patch
+from urllib.parse import quote
 
 import pytest
 from gcal_sync.exceptions import ApiException
@@ -91,7 +92,7 @@ async def test_create_event_posts_the_built_body_and_returns_the_ical_uid():
 
     assert uid == "abc123@google.com"
     (url,), kwargs = auth.post_json.call_args
-    assert _CALENDAR_REF in url
+    assert quote(_CALENDAR_REF, safe="") in url
     body = kwargs["json"]
     assert body["summary"] == "Dentist"
     assert body["reminders"]["useDefault"] is False
