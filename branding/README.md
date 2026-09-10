@@ -1,17 +1,28 @@
 # Branding assets
 
-Source and exports for Calendar Bridge's icon, used for the submission to
-[home-assistant/brands](https://github.com/home-assistant/brands)
-(`custom_integrations/calendar_bridge/`) — that repository is what actually
-supplies the icon shown in the Home Assistant UI and in HACS; nothing here
-is read directly by the integration itself.
+Source for Calendar Bridge's icon. Since Home Assistant 2026.3.0, custom
+integrations serve their own brand images directly from a `brand/` folder
+inside the integration (see the
+[brands proxy API announcement](https://developers.home-assistant.io/blog/2026/02/24/brands-proxy-api));
+submitting to [home-assistant/brands](https://github.com/home-assistant/brands)
+is no longer accepted for custom integrations. The actual served files live
+at
+[`custom_components/calendar_bridge/brand/`](../custom_components/calendar_bridge/brand/)
+(`icon.png`, `icon@2x.png`, `logo.png`) — this folder only holds the editable
+source and is not read by the integration itself.
 
 - `icon.svg` — editable source. Flat design, transparent background,
-  256x256 viewBox.
-- `icon.png` (256x256) / `icon@2x.png` (512x512) — rasterized exports,
-  matching what `home-assistant/brands` expects for `icon.png`/`icon@2x.png`.
+  1254x1254 viewBox.
 
-To regenerate the PNGs after editing the SVG, re-render at 512x512 with
-anti-aliasing (e.g. via a browser or any SVG rasterizer) and downscale the
-256x256 version from that, rather than rendering 256x256 directly, to avoid
-jagged edges.
+To regenerate the PNGs after editing the SVG:
+
+```
+npx --yes @resvg/resvg-js  # or any SVG rasterizer with alpha support
+```
+
+(a small one-off Node script using `@resvg/resvg-js`'s `Resvg` API works
+well — render at width 512 for `icon@2x.png` and width 256 for `icon.png`,
+with `background: 'rgba(0,0,0,0)'`), then copy both into
+`custom_components/calendar_bridge/brand/` as `icon.png`/`icon@2x.png` (and
+`logo.png`, currently identical to `icon.png` since there's no separate
+wordmark).
