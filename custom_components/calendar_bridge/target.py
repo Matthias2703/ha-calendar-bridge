@@ -25,6 +25,21 @@ class ReminderSpec:
 
 
 @dataclass(frozen=True, slots=True)
+class SeenEvent:
+    """One event discovered while polling a calendar for new events.
+
+    Carries enough of the event to let the caller decide whether to also
+    schedule an independent HA-native notification for it (see
+    `__init__.py`'s poller) -- the persisted seen-UID baseline itself only
+    ever needs `uid`.
+    """
+
+    uid: str
+    summary: str
+    start: datetime | date
+
+
+@dataclass(frozen=True, slots=True)
 class EventSpec:
     """Backend-agnostic description of the event a service call wants created."""
 
@@ -103,8 +118,8 @@ class CalendarTarget(Protocol):
         method: ReminderMethod,
         lookahead: timedelta,
         skip_backfill: bool,
-    ) -> set[str] | None:
-        """Poll for events not seen on a previous poll; return every UID seen.
+    ) -> set[SeenEvent] | None:
+        """Poll for events not seen on a previous poll; return every event seen.
 
         Returns `None` (instead of an empty set) when `calendar_ref` itself
         couldn't be found/accessed this poll, so the caller can tell "the

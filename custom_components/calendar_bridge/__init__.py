@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
@@ -32,6 +32,11 @@ from .const import (
     CONF_DEFAULT_REMINDER_MINUTES,
     CONF_DISPLAY_NAME,
     CONF_GOOGLE_ENTRY_ID,
+    CONF_NOTIFY_ENABLED,
+    CONF_NOTIFY_MINUTES_BEFORE,
+    CONF_NOTIFY_TARGET,
+    DEFAULT_NOTIFY_ENABLED,
+    DEFAULT_NOTIFY_MINUTES_BEFORE,
     DOMAIN,
     REMINDER_METHOD_NONE,
     SERVICE_CREATE_EVENT,
@@ -41,6 +46,7 @@ from .google_target import GoogleCalendarTarget
 from .reminder_scheduler import ReminderScheduler
 from .seen_events import SeenEventsTracker
 from .services import CREATE_EVENT_SCHEMA, async_handle_create_event
+from .target import SeenEvent
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -76,6 +82,40 @@ type CalendarBridgeConfigEntry = ConfigEntry[CalDavCalendarTarget | GoogleCalend
 __all__ = ["DOMAIN"]
 
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
+
+
+def _notify_settings(subentry: Any) -> tuple[str, int] | None:
+    """Return (target, minutes_before) if this calendar's HA notification is enabled.
+
+    Independent of the native (VALARM/Google) reminder settings -- a user can
+    have either, both, or neither. `.get(...)` with a fallback throughout,
+    since a subentry created before this feature existed has none of these
+    keys stored yet.
+    """
+    if not subentry.data.get(CONF_NOTIFY_ENABLED, DEFAULT_NOTIFY_ENABLED):
+        return None
+    target = subentry.data.get(CONF_NOTIFY_TARGET) or ""
+    if not target:
+        return None
+    return target, subentry.data.get(CONF_NOTIFY_MINUTES_BEFORE, DEFAULT_NOTIFY_MINUTES_BEFORE)
+
+
+async def _async_schedule_ha_notification(
+    scheduler: ReminderScheduler,
+    target: str,
+    minutes_before: int,
+    summary: str,
+    start: datetime | date,
+) -> None:
+    """Schedule an HA-native notification for a newly-detected calendar event."""
+    start_dt = (
+        start if isinstance(start, datetime) else datetime.combine(start, datetime.min.time())
+    )
+    fire_at = dt_util.as_utc(start_dt) - timedelta(minutes=minutes_before)
+    try:
+        await scheduler.async_schedule(target, fire_at, f"Reminder: {summary}")
+    except Exception:  # noqa: BLE001 -- one failed schedule must not break the poll
+        _LOGGER.warning("Failed to schedule an HA notification for '%s'", summary, exc_info=True)
 
 
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
@@ -197,18 +237,23 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
             for subentry in list(entry.subentries.values()):
                 method = subentry.data[CONF_DEFAULT_REMINDER_METHOD]
                 calendar_ref = subentry.data[CONF_CALENDAR_URL]
-                # A calendar whose reminder is turned off still needs its
-                # seen-UID baseline kept current -- otherwise every event
-                # created while it was off looks "new" the moment it's
-                # turned back on, and skip_backfill (not just the "none"
-                # method) already tells the backend not to patch anything.
-                skip_backfill = method == REMINDER_METHOD_NONE or not seen_events.has_baseline(
-                    calendar_ref
-                )
+                # A calendar's very first poll only ever establishes the UID
+                # baseline -- it never patches a native reminder nor sends an
+                # HA notification, so a user adding an already-populated
+                # calendar isn't surprised by a flood of both for years of
+                # pre-existing events.
+                is_first_poll = not seen_events.has_baseline(calendar_ref)
+                # A calendar whose native reminder is turned off still needs
+                # its seen-UID baseline kept current -- otherwise every event
+                # created while it was off looks "new" the moment it's turned
+                # back on. This only controls the backend's own VALARM/Google
+                # patch, not the independent HA notification below.
+                skip_backfill = method == REMINDER_METHOD_NONE or is_first_poll
+                known_before = seen_events.known_uids(calendar_ref)
                 try:
-                    new_uids = await target.async_backfill_new_events(
+                    found: set[SeenEvent] | None = await target.async_backfill_new_events(
                         calendar_ref,
-                        seen_events.known_uids(calendar_ref),
+                        known_before,
                         subentry.data[CONF_DEFAULT_REMINDER_MINUTES],
                         method,
                         _POLL_LOOKAHEAD,
@@ -217,13 +262,27 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
                 except Exception:  # noqa: BLE001 -- one bad calendar must not block the rest
                     _LOGGER.warning("Failed to poll %s for new events", calendar_ref, exc_info=True)
                     continue
-                if new_uids is None:
+                if found is None:
                     # The calendar itself couldn't be found/reached this poll
                     # -- don't record an empty baseline for it, or a later,
                     # genuinely successful poll would treat every one of its
                     # pre-existing events as brand new.
                     continue
-                await seen_events.async_add(calendar_ref, new_uids)
+                await seen_events.async_add(calendar_ref, {seen.uid for seen in found})
+
+                notify = _notify_settings(subentry)
+                if notify is not None and not is_first_poll:
+                    notify_target, notify_minutes_before = notify
+                    for seen in found:
+                        if seen.uid in known_before:
+                            continue
+                        await _async_schedule_ha_notification(
+                            scheduler,
+                            notify_target,
+                            notify_minutes_before,
+                            seen.summary,
+                            seen.start,
+                        )
 
     async_track_time_interval(hass, _async_poll_for_new_events, _POLL_INTERVAL)
     return True

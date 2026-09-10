@@ -33,6 +33,7 @@ from .target import (
     CalendarNotFoundError,
     EventSpec,
     ReminderMethod,
+    SeenEvent,
     all_day_bounds,
 )
 
@@ -246,7 +247,7 @@ class GoogleCalendarTarget:
         method: ReminderMethod,
         lookahead: timedelta,
         skip_backfill: bool,
-    ) -> set[str] | None:
+    ) -> set[SeenEvent] | None:
         """Poll the calendar for events not seen on a previous poll.
 
         Catches events created via the native "+" button (Google's calendar
@@ -264,7 +265,7 @@ class GoogleCalendarTarget:
                 calendarId=calendar_ref, timeMin=now - timedelta(days=1), timeMax=now + lookahead
             )
             response = await service.async_list_events(request)
-            seen: set[str] = set()
+            seen: set[SeenEvent] = set()
             async for page in response:
                 for event in page.items:
                     # `event.id` is unique per recurrence instance; the
@@ -274,7 +275,7 @@ class GoogleCalendarTarget:
                     uid = event.id or event.ical_uuid
                     if not uid:
                         continue
-                    seen.add(uid)
+                    seen.add(SeenEvent(uid=uid, summary=event.summary, start=event.start.value))
                     if uid in known_uids or skip_backfill or _has_explicit_reminder(event):
                         continue
                     await service.async_patch_event(

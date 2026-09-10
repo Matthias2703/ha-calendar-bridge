@@ -11,7 +11,12 @@ import icalendar
 import pytest
 
 from custom_components.calendar_bridge.caldav_target import CalDavCalendarTarget
-from custom_components.calendar_bridge.target import CalendarNotFoundError, EventSpec, ReminderSpec
+from custom_components.calendar_bridge.target import (
+    CalendarNotFoundError,
+    EventSpec,
+    ReminderSpec,
+    SeenEvent,
+)
 
 
 class _FakeHass:
@@ -266,10 +271,13 @@ async def test_missing_calendar_raises_calendar_not_found():
         await target.async_create_event("https://example.test/cal/", spec)
 
 
-def _mock_caldav_event(summary: str, has_alarm: bool) -> MagicMock:
+def _mock_caldav_event(
+    summary: str, has_alarm: bool, start: datetime = datetime(2026, 10, 1, 9, 0, tzinfo=UTC)
+) -> MagicMock:
     """A mock CalendarObjectResource wrapping a real icalendar.Event."""
     component = icalendar.Event()
     component.add("summary", summary)
+    component.add("dtstart", start)
     if has_alarm:
         alarm = icalendar.Alarm()
         alarm.add("action", "DISPLAY")
@@ -366,7 +374,7 @@ async def _poll(
     mock_calendar: MagicMock,
     known_uids: set[str],
     skip_backfill: bool = False,
-) -> set[str]:
+) -> set[SeenEvent] | None:
     with patch(
         "custom_components.calendar_bridge.caldav_target.build_client",
         return_value=_client_for(calendar_ref, mock_calendar),
@@ -384,6 +392,24 @@ def _client_for(calendar_ref: str, mock_calendar: MagicMock) -> MagicMock:
 
 
 @pytest.mark.asyncio
+async def test_poll_seen_event_carries_summary_and_start():
+    # The caller (the poller in __init__.py) needs summary/start to schedule
+    # an independent HA notification for a genuinely new event -- not just
+    # its bare UID for the persisted baseline.
+    target = _make_target()
+    calendar_ref = "https://example.test/cal/"
+    mock_calendar = MagicMock()
+    start = datetime(2026, 11, 2, 8, 30, tzinfo=UTC)
+    event = _mock_caldav_event("Dentist", has_alarm=False, start=start)
+    event.icalendar_component.add("uid", "uid-1")
+    mock_calendar.date_search.return_value = [event]
+
+    seen = await _poll(target, calendar_ref, mock_calendar, known_uids=set())
+
+    assert seen == {SeenEvent(uid="uid-1", summary="Dentist", start=start)}
+
+
+@pytest.mark.asyncio
 async def test_poll_backfills_a_new_reminder_less_event():
     target = _make_target()
     calendar_ref = "https://example.test/cal/"
@@ -394,7 +420,8 @@ async def test_poll_backfills_a_new_reminder_less_event():
 
     seen = await _poll(target, calendar_ref, mock_calendar, known_uids=set())
 
-    assert seen == {"uid-1"}
+    assert seen is not None
+    assert {e.uid for e in seen} == {"uid-1"}
     event.save.assert_called_once()
     assert list(event.icalendar_component.walk("VALARM"))
 
@@ -410,7 +437,8 @@ async def test_poll_skips_an_already_known_uid():
 
     seen = await _poll(target, calendar_ref, mock_calendar, known_uids={"uid-1"})
 
-    assert seen == {"uid-1"}
+    assert seen is not None
+    assert {e.uid for e in seen} == {"uid-1"}
     event.save.assert_not_called()
 
 
@@ -427,7 +455,8 @@ async def test_poll_with_skip_backfill_only_collects_uids():
 
     seen = await _poll(target, calendar_ref, mock_calendar, known_uids=set(), skip_backfill=True)
 
-    assert seen == {"uid-old"}
+    assert seen is not None
+    assert {e.uid for e in seen} == {"uid-old"}
     event.save.assert_not_called()
 
 

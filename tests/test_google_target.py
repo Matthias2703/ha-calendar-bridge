@@ -14,7 +14,12 @@ from gcal_sync.model import DateOrDatetime, Reminders
 from gcal_sync.model import Event as GoogleEvent
 
 from custom_components.calendar_bridge.google_target import GoogleCalendarTarget
-from custom_components.calendar_bridge.target import CalendarNotFoundError, EventSpec, ReminderSpec
+from custom_components.calendar_bridge.target import (
+    CalendarNotFoundError,
+    EventSpec,
+    ReminderSpec,
+    SeenEvent,
+)
 
 _CALENDAR_REF = "matthias@example.com"
 _LOOKAHEAD = timedelta(days=365)
@@ -190,8 +195,27 @@ async def test_poll_backfills_a_new_reminder_less_event():
 
     # Keyed by the per-instance `id`, not the (possibly shared) `iCalUID` --
     # see test_poll_treats_separate_instances_of_a_recurring_uid_as_distinct.
-    assert seen == {"evt1"}
+    assert seen is not None
+    assert {e.uid for e in seen} == {"evt1"}
     service.async_patch_event.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_poll_seen_event_carries_summary_and_start():
+    # The caller (the poller in __init__.py) needs summary/start to schedule
+    # an independent HA notification for a genuinely new event -- not just
+    # its bare UID for the persisted baseline.
+    target = _make_target()
+    service = _FakeService([_google_event("evt1", "Dentist", ical_uuid="uid-1")])
+
+    with _patched(target, service):
+        seen = await target.async_backfill_new_events(
+            _CALENDAR_REF, set(), 30, "popup", _LOOKAHEAD, False
+        )
+
+    assert seen == {
+        SeenEvent(uid="evt1", summary="Dentist", start=datetime(2026, 9, 10, 14, 0, tzinfo=UTC))
+    }
 
 
 @pytest.mark.asyncio
@@ -204,7 +228,8 @@ async def test_poll_skips_an_already_known_uid():
             _CALENDAR_REF, {"evt1"}, 30, "popup", _LOOKAHEAD, False
         )
 
-    assert seen == {"evt1"}
+    assert seen is not None
+    assert {e.uid for e in seen} == {"evt1"}
     service.async_patch_event.assert_not_awaited()
 
 
@@ -218,7 +243,8 @@ async def test_poll_with_skip_backfill_only_collects_uids():
             _CALENDAR_REF, set(), 30, "popup", _LOOKAHEAD, True
         )
 
-    assert seen == {"evt1"}
+    assert seen is not None
+    assert {e.uid for e in seen} == {"evt1"}
     service.async_patch_event.assert_not_awaited()
 
 
@@ -241,7 +267,8 @@ async def test_poll_treats_separate_instances_of_a_recurring_uid_as_distinct():
     # its persisted baseline) -- instance-2 is neither in known_uids nor
     # already-reminded, so it's treated as new and backfilled, proving the
     # shared iCalUID from instance-1 didn't cause it to be skipped.
-    assert seen == {"evt-instance-2"}
+    assert seen is not None
+    assert {e.uid for e in seen} == {"evt-instance-2"}
     service.async_patch_event.assert_awaited_once()
 
 

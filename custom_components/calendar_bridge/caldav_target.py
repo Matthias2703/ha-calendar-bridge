@@ -21,6 +21,7 @@ from .target import (
     CalendarNotFoundError,
     EventSpec,
     ReminderMethod,
+    SeenEvent,
     all_day_bounds,
     as_utc,
 )
@@ -199,7 +200,7 @@ class CalDavCalendarTarget:
         method: ReminderMethod,
         lookahead: timedelta,
         skip_backfill: bool,
-    ) -> set[str] | None:
+    ) -> set[SeenEvent] | None:
         """Poll the calendar for events not seen on a previous poll.
 
         Covers what `async_backfill_reminder` can't: an event created via
@@ -208,14 +209,16 @@ class CalDavCalendarTarget:
         so EVENT_CALL_SERVICE never fires for it) or added straight in the
         iOS Calendar app and picked up via iCloud sync.
 
-        Returns every UID seen this poll, whether or not it got a reminder,
-        so the caller can merge it into its persisted baseline. When
-        `skip_backfill` is set (a calendar's very first poll), no reminder
-        is added -- only the current UIDs are collected, so pre-existing
-        events a user deliberately left without a reminder aren't touched.
-        Returns `None` -- instead of an empty set -- if `calendar_ref`
-        couldn't be found/reached this poll, so the caller doesn't mistake a
-        failed lookup for "this calendar genuinely has no events."
+        Returns every event seen this poll, whether or not it got a reminder,
+        so the caller can merge the UIDs into its persisted baseline and
+        optionally schedule an independent HA notification for the ones it
+        hadn't seen before. When `skip_backfill` is set (a calendar's very
+        first poll), no reminder is added -- only the current events are
+        collected, so pre-existing events a user deliberately left without a
+        reminder aren't touched. Returns `None` -- instead of an empty set --
+        if `calendar_ref` couldn't be found/reached this poll, so the caller
+        doesn't mistake a failed lookup for "this calendar genuinely has no
+        events."
         """
         try:
             return await self._hass.async_add_executor_job(
@@ -239,7 +242,7 @@ class CalDavCalendarTarget:
         method: ReminderMethod,
         lookahead: timedelta,
         skip_backfill: bool,
-    ) -> set[str] | None:
+    ) -> set[SeenEvent] | None:
         client = build_client(self._url, self._username, self._password, self._verify_ssl)
         calendar = self._find_calendar(client, calendar_ref)
         if calendar is None:
@@ -247,18 +250,20 @@ class CalDavCalendarTarget:
 
         now = datetime.now(UTC)
         events = calendar.date_search(now - timedelta(days=1), now + lookahead)
-        seen: set[str] = set()
+        seen: set[SeenEvent] = set()
         for event in events:
             component = event.icalendar_component
             uid = str(component.get("uid", ""))
             if not uid:
                 continue
-            seen.add(uid)
+            summary = str(component.get("summary", ""))
+            dtstart = component.get("dtstart")
+            start = dtstart.dt if dtstart is not None else now
+            seen.add(SeenEvent(uid=uid, summary=summary, start=start))
             if uid in known_uids or skip_backfill:
                 continue
             if list(component.walk("VALARM")):
                 continue  # already has a reminder
-            summary = str(component.get("summary", ""))
             component.add_component(self._build_alarm(summary, method, minutes_before))
             event.save()
             _LOGGER.info("Backfilled a %s reminder onto '%s' (poll)", method, summary)

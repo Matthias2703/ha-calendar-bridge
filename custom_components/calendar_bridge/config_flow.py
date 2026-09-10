@@ -35,6 +35,11 @@ from .const import (
     CONF_DEFAULT_TARGET,
     CONF_DISPLAY_NAME,
     CONF_GOOGLE_ENTRY_ID,
+    CONF_NOTIFY_ENABLED,
+    CONF_NOTIFY_MINUTES_BEFORE,
+    CONF_NOTIFY_TARGET,
+    DEFAULT_NOTIFY_ENABLED,
+    DEFAULT_NOTIFY_MINUTES_BEFORE,
     DEFAULT_REMINDER_METHOD,
     DEFAULT_REMINDER_MINUTES,
     DOMAIN,
@@ -91,6 +96,25 @@ def _reminder_defaults_schema(
         vol.Optional(
             CONF_DEFAULT_TARGET, default=defaults.get(CONF_DEFAULT_TARGET, False)
         ): selector.BooleanSelector(),
+        # Independent of the reminder settings above: an HA-native
+        # notification calendar_bridge schedules itself for every event it
+        # detects here, regardless of how the event was created.
+        vol.Optional(
+            CONF_NOTIFY_ENABLED, default=defaults.get(CONF_NOTIFY_ENABLED, DEFAULT_NOTIFY_ENABLED)
+        ): selector.BooleanSelector(),
+        vol.Optional(
+            CONF_NOTIFY_TARGET, default=defaults.get(CONF_NOTIFY_TARGET, "")
+        ): selector.EntitySelector(selector.EntitySelectorConfig(domain="notify")),
+        vol.Optional(
+            CONF_NOTIFY_MINUTES_BEFORE,
+            default=defaults.get(CONF_NOTIFY_MINUTES_BEFORE, DEFAULT_NOTIFY_MINUTES_BEFORE),
+        ): selector.NumberSelector(
+            selector.NumberSelectorConfig(
+                min=MIN_REMINDER_MINUTES,
+                max=MAX_REMINDER_MINUTES,
+                mode=selector.NumberSelectorMode.BOX,
+            )
+        ),
     }
 
 
@@ -232,6 +256,9 @@ class CalendarBridgeConfigFlow(ConfigFlow, domain=DOMAIN):
                         CONF_DEFAULT_REMINDER_MINUTES: user_input[CONF_DEFAULT_REMINDER_MINUTES],
                         CONF_DEFAULT_REMINDER_METHOD: user_input[CONF_DEFAULT_REMINDER_METHOD],
                         CONF_DEFAULT_TARGET: user_input[CONF_DEFAULT_TARGET],
+                        CONF_NOTIFY_ENABLED: user_input[CONF_NOTIFY_ENABLED],
+                        CONF_NOTIFY_TARGET: user_input[CONF_NOTIFY_TARGET],
+                        CONF_NOTIFY_MINUTES_BEFORE: user_input[CONF_NOTIFY_MINUTES_BEFORE],
                     },
                 }
                 for calendar_url in user_input[CONF_CALENDAR_URL]
@@ -308,6 +335,9 @@ class CalendarBridgeConfigFlow(ConfigFlow, domain=DOMAIN):
                         CONF_DEFAULT_REMINDER_MINUTES: user_input[CONF_DEFAULT_REMINDER_MINUTES],
                         CONF_DEFAULT_REMINDER_METHOD: user_input[CONF_DEFAULT_REMINDER_METHOD],
                         CONF_DEFAULT_TARGET: user_input[CONF_DEFAULT_TARGET],
+                        CONF_NOTIFY_ENABLED: user_input[CONF_NOTIFY_ENABLED],
+                        CONF_NOTIFY_TARGET: user_input[CONF_NOTIFY_TARGET],
+                        CONF_NOTIFY_MINUTES_BEFORE: user_input[CONF_NOTIFY_MINUTES_BEFORE],
                     },
                 }
                 for calendar_id in user_input[CONF_CALENDAR_URL]
@@ -392,6 +422,9 @@ class CalendarSubentryFlow(ConfigSubentryFlow):
                     CONF_DEFAULT_REMINDER_MINUTES: user_input[CONF_DEFAULT_REMINDER_MINUTES],
                     CONF_DEFAULT_REMINDER_METHOD: user_input[CONF_DEFAULT_REMINDER_METHOD],
                     CONF_DEFAULT_TARGET: user_input[CONF_DEFAULT_TARGET],
+                    CONF_NOTIFY_ENABLED: user_input[CONF_NOTIFY_ENABLED],
+                    CONF_NOTIFY_TARGET: user_input[CONF_NOTIFY_TARGET],
+                    CONF_NOTIFY_MINUTES_BEFORE: user_input[CONF_NOTIFY_MINUTES_BEFORE],
                 },
                 unique_id=calendar_ref,
             )

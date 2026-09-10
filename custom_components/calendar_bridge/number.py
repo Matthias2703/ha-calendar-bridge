@@ -10,6 +10,8 @@ from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from .const import (
     CONF_DEFAULT_REMINDER_MINUTES,
+    CONF_NOTIFY_MINUTES_BEFORE,
+    DEFAULT_NOTIFY_MINUTES_BEFORE,
     DOMAIN,
     MAX_REMINDER_MINUTES,
     MIN_REMINDER_MINUTES,
@@ -19,10 +21,14 @@ from .const import (
 async def async_setup_entry(
     hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddConfigEntryEntitiesCallback
 ) -> None:
-    """Add one reminder-lead-time number per configured calendar."""
+    """Add the reminder and HA-notification lead-time numbers per configured calendar."""
     for subentry_id in entry.subentries:
         async_add_entities(
-            [CalendarBridgeReminderMinutes(entry, subentry_id)], config_subentry_id=subentry_id
+            [
+                CalendarBridgeReminderMinutes(entry, subentry_id),
+                CalendarBridgeNotifyMinutes(entry, subentry_id),
+            ],
+            config_subentry_id=subentry_id,
         )
 
 
@@ -65,5 +71,51 @@ class CalendarBridgeReminderMinutes(NumberEntity):
             self._entry,
             subentry,
             data={**subentry.data, CONF_DEFAULT_REMINDER_MINUTES: int(value)},
+        )
+        self.async_write_ha_state()
+
+
+class CalendarBridgeNotifyMinutes(NumberEntity):
+    """How many minutes before an event calendar_bridge sends an HA notification.
+
+    Only takes effect while the calendar's HA-notification switch is on --
+    independent of the native reminder lead time above.
+    """
+
+    _attr_has_entity_name = True
+    _attr_translation_key = "notify_minutes"
+    _attr_should_poll = False
+    _attr_native_min_value = MIN_REMINDER_MINUTES
+    _attr_native_max_value = MAX_REMINDER_MINUTES
+    _attr_native_step = 1
+    _attr_mode = NumberMode.BOX
+    _attr_native_unit_of_measurement = "min"
+
+    def __init__(self, entry: ConfigEntry, subentry_id: str) -> None:
+        self._entry = entry
+        self._subentry_id = subentry_id
+        self._attr_unique_id = f"{subentry_id}_notify_minutes"
+        self._attr_device_info = DeviceInfo(identifiers={(DOMAIN, subentry_id)})
+
+    async def async_added_to_hass(self) -> None:
+        self.async_on_remove(self._entry.add_update_listener(self._async_entry_updated))
+
+    async def _async_entry_updated(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
+        self.async_write_ha_state()
+
+    @property
+    def native_value(self) -> float:
+        return float(
+            self._entry.subentries[self._subentry_id].data.get(
+                CONF_NOTIFY_MINUTES_BEFORE, DEFAULT_NOTIFY_MINUTES_BEFORE
+            )
+        )
+
+    async def async_set_native_value(self, value: float) -> None:
+        subentry = self._entry.subentries[self._subentry_id]
+        self.hass.config_entries.async_update_subentry(
+            self._entry,
+            subentry,
+            data={**subentry.data, CONF_NOTIFY_MINUTES_BEFORE: int(value)},
         )
         self.async_write_ha_state()

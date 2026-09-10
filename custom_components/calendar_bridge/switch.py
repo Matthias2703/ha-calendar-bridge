@@ -10,6 +10,8 @@ from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from .const import (
     CONF_DEFAULT_REMINDER_METHOD,
+    CONF_NOTIFY_ENABLED,
+    DEFAULT_NOTIFY_ENABLED,
     DOMAIN,
     REMINDER_METHOD_NONE,
     REMINDER_METHOD_POPUP,
@@ -19,10 +21,14 @@ from .const import (
 async def async_setup_entry(
     hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddConfigEntryEntitiesCallback
 ) -> None:
-    """Add one reminder on/off switch per configured calendar."""
+    """Add the reminder and HA-notification on/off switches per configured calendar."""
     for subentry_id in entry.subentries:
         async_add_entities(
-            [CalendarBridgeReminderSwitch(entry, subentry_id)], config_subentry_id=subentry_id
+            [
+                CalendarBridgeReminderSwitch(entry, subentry_id),
+                CalendarBridgeNotifySwitch(entry, subentry_id),
+            ],
+            config_subentry_id=subentry_id,
         )
 
 
@@ -79,5 +85,53 @@ class CalendarBridgeReminderSwitch(SwitchEntity):
         subentry = self._entry.subentries[self._subentry_id]
         self.hass.config_entries.async_update_subentry(
             self._entry, subentry, data={**subentry.data, CONF_DEFAULT_REMINDER_METHOD: method}
+        )
+        self.async_write_ha_state()
+
+
+class CalendarBridgeNotifySwitch(SwitchEntity):
+    """Whether this calendar also sends an independent Home Assistant notification.
+
+    Separate from the native reminder switch above -- a user can have either,
+    both, or neither. The notify target/lead-time themselves are only set via
+    the "Add calendar"/"Edit calendar defaults" dialog, not here, so this
+    switch never has to guess or lose them the way a value-carrying toggle
+    would.
+    """
+
+    _attr_has_entity_name = True
+    _attr_translation_key = "notify_enabled"
+    _attr_should_poll = False
+
+    def __init__(self, entry: ConfigEntry, subentry_id: str) -> None:
+        self._entry = entry
+        self._subentry_id = subentry_id
+        self._attr_unique_id = f"{subentry_id}_notify_enabled"
+        self._attr_device_info = DeviceInfo(identifiers={(DOMAIN, subentry_id)})
+
+    async def async_added_to_hass(self) -> None:
+        self.async_on_remove(self._entry.add_update_listener(self._async_entry_updated))
+
+    async def _async_entry_updated(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
+        self.async_write_ha_state()
+
+    @property
+    def is_on(self) -> bool:
+        return bool(
+            self._entry.subentries[self._subentry_id].data.get(
+                CONF_NOTIFY_ENABLED, DEFAULT_NOTIFY_ENABLED
+            )
+        )
+
+    async def async_turn_on(self, **kwargs: object) -> None:
+        await self._async_set_enabled(True)
+
+    async def async_turn_off(self, **kwargs: object) -> None:
+        await self._async_set_enabled(False)
+
+    async def _async_set_enabled(self, enabled: bool) -> None:
+        subentry = self._entry.subentries[self._subentry_id]
+        self.hass.config_entries.async_update_subentry(
+            self._entry, subentry, data={**subentry.data, CONF_NOTIFY_ENABLED: enabled}
         )
         self.async_write_ha_state()
