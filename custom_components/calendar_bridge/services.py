@@ -26,6 +26,7 @@ from .const import (
     ATTR_NOTIFY_MESSAGE,
     ATTR_NOTIFY_TARGET,
     ATTR_REMINDER_MINUTES,
+    ATTR_REMINDER_TIME,
     ATTR_REMINDERS,
     ATTR_RRULE,
     ATTR_START,
@@ -55,6 +56,8 @@ _REMINDER_SCHEMA = vol.Schema(
         vol.Optional(ATTR_METHOD, default=REMINDER_METHOD_POPUP): vol.In(
             [REMINDER_METHOD_POPUP, REMINDER_METHOD_EMAIL]
         ),
+        # Only consulted for all-day events -- see `effective_reminder_minutes`.
+        vol.Optional(ATTR_REMINDER_TIME): cv.time,
     }
 )
 
@@ -78,6 +81,7 @@ CREATE_EVENT_SCHEMA = vol.Schema(
         vol.Optional(ATTR_REMINDER_MINUTES): vol.All(
             int, vol.Range(min=MIN_REMINDER_MINUTES, max=MAX_REMINDER_MINUTES)
         ),
+        vol.Optional(ATTR_REMINDER_TIME): cv.time,
         vol.Optional(ATTR_REMINDERS): vol.All(
             cv.ensure_list, [_REMINDER_SCHEMA], vol.Length(max=MAX_REMINDERS)
         ),
@@ -91,11 +95,20 @@ def _reminders_from_call(data: dict[str, Any]) -> tuple[ReminderSpec, ...] | Non
     """Explicit reminders from the call, or None if the subentry default applies."""
     if ATTR_REMINDERS in data:
         return tuple(
-            ReminderSpec(minutes_before=r[ATTR_MINUTES_BEFORE], method=r[ATTR_METHOD])
+            ReminderSpec(
+                minutes_before=r[ATTR_MINUTES_BEFORE],
+                method=r[ATTR_METHOD],
+                time_of_day=r.get(ATTR_REMINDER_TIME),
+            )
             for r in data[ATTR_REMINDERS]
         )
     if ATTR_REMINDER_MINUTES in data:
-        return (ReminderSpec(minutes_before=data[ATTR_REMINDER_MINUTES]),)
+        return (
+            ReminderSpec(
+                minutes_before=data[ATTR_REMINDER_MINUTES],
+                time_of_day=data.get(ATTR_REMINDER_TIME),
+            ),
+        )
     return None
 
 

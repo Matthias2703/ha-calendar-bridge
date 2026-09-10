@@ -225,9 +225,13 @@
           "name": "Erinnerung (Minuten)",
           "description": "Minuten vor dem Termin für eine einzelne Popup-Erinnerung. Wird ignoriert, falls 'reminders' gesetzt ist."
         },
+        "reminder_time": {
+          "name": "Erinnerungszeit",
+          "description": "Nur für ganztägige Termine: die Uhrzeit, zu der die Erinnerung ausgelöst wird (Standard 9:00 Uhr). Wird bei Terminen mit Uhrzeit ignoriert."
+        },
         "reminders": {
           "name": "Erinnerungen",
-          "description": "Bis zu 5 Erinnerungen. Jeder Eintrag braucht eine Methode (popup oder email) und minutes_before."
+          "description": "Bis zu 5 Erinnerungen. Jeder Eintrag braucht eine Methode (popup oder email) und minutes_before, optional auch reminder_time (nur ganztägige Termine)."
         },
         "rrule": {
           "name": "Wiederholungsregel",

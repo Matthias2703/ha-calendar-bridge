@@ -71,3 +71,35 @@ def async_find_default_device(hass: HomeAssistant) -> str | None:
     if len(all_device_ids) == 1:
         return all_device_ids[0]
     return None
+
+
+@callback
+def async_clear_other_defaults(
+    hass: HomeAssistant, keep_entry: ConfigEntry | None, keep_subentry_id: str | None
+) -> None:
+    """Unmark every other calendar (on any account) as the default target.
+
+    Called right after a subentry is created/updated with
+    `CONF_DEFAULT_TARGET: True`, so at most one calendar across every
+    Calendar Bridge account is ever marked default --
+    `async_find_default_device` searches across all accounts and returns the
+    first match it finds with no further validation, so more than one would
+    silently make the "winner" an implementation detail of dict/entry
+    ordering. `(keep_entry, keep_subentry_id)` identifies the subentry that
+    was just marked default (excluded from clearing); pass `keep_entry=None`
+    to clear every existing calendar, e.g. before a brand-new account entry
+    (whose own subentries don't exist yet) is created.
+    """
+    for entry in hass.config_entries.async_entries(DOMAIN):
+        for subentry_id, subentry in entry.subentries.items():
+            if (
+                keep_entry is not None
+                and entry.entry_id == keep_entry.entry_id
+                and subentry_id == keep_subentry_id
+            ):
+                continue
+            if not subentry.data.get(CONF_DEFAULT_TARGET):
+                continue
+            hass.config_entries.async_update_subentry(
+                entry, subentry, data={**subentry.data, CONF_DEFAULT_TARGET: False}
+            )

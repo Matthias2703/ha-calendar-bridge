@@ -49,6 +49,7 @@ from .const import (
     REMINDER_METHOD_NONE,
     REMINDER_METHOD_POPUP,
 )
+from .device import async_clear_other_defaults
 from .google_target import GoogleAccountNotFoundError, async_list_writable_calendars
 
 _LOGGER = logging.getLogger(__name__)
@@ -245,6 +246,12 @@ class CalendarBridgeConfigFlow(ConfigFlow, domain=DOMAIN):
         """Pick one or more target calendars for this account."""
         choices = _calendar_choices(self._caldav_calendars)
         if user_input is not None:
+            if user_input[CONF_DEFAULT_TARGET]:
+                # Only one calendar across every account may be the default --
+                # clear any pre-existing one before this new batch creates its
+                # own (see the per-calendar_url loop below for why only the
+                # first of *this* batch keeps the flag).
+                async_clear_other_defaults(self.hass, None, None)
             subentries: list[ConfigSubentryData] = [
                 {
                     "subentry_type": "calendar",
@@ -255,13 +262,15 @@ class CalendarBridgeConfigFlow(ConfigFlow, domain=DOMAIN):
                         CONF_DISPLAY_NAME: choices[calendar_url],
                         CONF_DEFAULT_REMINDER_MINUTES: user_input[CONF_DEFAULT_REMINDER_MINUTES],
                         CONF_DEFAULT_REMINDER_METHOD: user_input[CONF_DEFAULT_REMINDER_METHOD],
-                        CONF_DEFAULT_TARGET: user_input[CONF_DEFAULT_TARGET],
+                        # A multi-select batch must not mark every calendar in
+                        # it as the default -- only the first one keeps it.
+                        CONF_DEFAULT_TARGET: user_input[CONF_DEFAULT_TARGET] and index == 0,
                         CONF_NOTIFY_ENABLED: user_input[CONF_NOTIFY_ENABLED],
                         CONF_NOTIFY_TARGET: user_input[CONF_NOTIFY_TARGET],
                         CONF_NOTIFY_MINUTES_BEFORE: user_input[CONF_NOTIFY_MINUTES_BEFORE],
                     },
                 }
-                for calendar_url in user_input[CONF_CALENDAR_URL]
+                for index, calendar_url in enumerate(user_input[CONF_CALENDAR_URL])
             ]
             return self.async_create_entry(
                 title=f"CalDAV ({self._caldav_data[CONF_USERNAME]})",
@@ -324,6 +333,12 @@ class CalendarBridgeConfigFlow(ConfigFlow, domain=DOMAIN):
         """Pick one or more of the Google account's writable calendars."""
         choices = _google_calendar_choices(self._google_calendars)
         if user_input is not None:
+            if user_input[CONF_DEFAULT_TARGET]:
+                # Only one calendar across every account may be the default --
+                # clear any pre-existing one before this new batch creates its
+                # own (see the per-calendar_id loop below for why only the
+                # first of *this* batch keeps the flag).
+                async_clear_other_defaults(self.hass, None, None)
             subentries: list[ConfigSubentryData] = [
                 {
                     "subentry_type": "calendar",
@@ -334,13 +349,15 @@ class CalendarBridgeConfigFlow(ConfigFlow, domain=DOMAIN):
                         CONF_DISPLAY_NAME: choices[calendar_id],
                         CONF_DEFAULT_REMINDER_MINUTES: user_input[CONF_DEFAULT_REMINDER_MINUTES],
                         CONF_DEFAULT_REMINDER_METHOD: user_input[CONF_DEFAULT_REMINDER_METHOD],
-                        CONF_DEFAULT_TARGET: user_input[CONF_DEFAULT_TARGET],
+                        # A multi-select batch must not mark every calendar in
+                        # it as the default -- only the first one keeps it.
+                        CONF_DEFAULT_TARGET: user_input[CONF_DEFAULT_TARGET] and index == 0,
                         CONF_NOTIFY_ENABLED: user_input[CONF_NOTIFY_ENABLED],
                         CONF_NOTIFY_TARGET: user_input[CONF_NOTIFY_TARGET],
                         CONF_NOTIFY_MINUTES_BEFORE: user_input[CONF_NOTIFY_MINUTES_BEFORE],
                     },
                 }
-                for calendar_id in user_input[CONF_CALENDAR_URL]
+                for index, calendar_id in enumerate(user_input[CONF_CALENDAR_URL])
             ]
             return self.async_create_entry(
                 title="Google Calendar",
@@ -414,6 +431,11 @@ class CalendarSubentryFlow(ConfigSubentryFlow):
         if user_input is not None:
             calendar_ref = user_input[CONF_CALENDAR_URL]
             display_name = choices[calendar_ref]
+            if user_input[CONF_DEFAULT_TARGET]:
+                # The new subentry doesn't exist yet, so there's nothing to
+                # exclude -- every existing calendar (this account or another)
+                # currently marked default gets cleared.
+                async_clear_other_defaults(self.hass, None, None)
             result = self.async_create_entry(
                 title=display_name,
                 data={
@@ -463,8 +485,14 @@ class CalendarSubentryFlow(ConfigSubentryFlow):
         )
 
         if user_input is not None:
+            entry = self._get_entry()
+            if user_input[CONF_DEFAULT_TARGET]:
+                subentry_id = next(
+                    sid for sid, sub in entry.subentries.items() if sub is subentry
+                )
+                async_clear_other_defaults(self.hass, entry, subentry_id)
             return self.async_update_and_abort(
-                self._get_entry(),
+                entry,
                 subentry,
                 data={**subentry.data, **user_input},
             )

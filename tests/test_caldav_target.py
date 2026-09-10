@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 from unittest.mock import MagicMock, patch
 
 import caldav
@@ -224,6 +224,50 @@ async def test_multiple_reminders_produce_multiple_alarms():
 
 
 @pytest.mark.asyncio
+async def test_all_day_reminder_anchors_to_time_of_day_not_midnight():
+    # A naive "N minutes before DTSTART" trigger would fire at 23:30 the
+    # previous night for a 30-minute reminder on an all-day event (DTSTART is
+    # midnight) -- it should instead anchor to a sensible time of day
+    # (default 9am), at least one day before.
+    target = _make_target()
+    spec = EventSpec(
+        summary="Birthday",
+        start=datetime(2026, 10, 1, 9, 0),
+        all_day=True,
+        reminders=(ReminderSpec(minutes_before=30, method="popup"),),
+    )
+
+    _uid, mock_calendar = await _create_event(target, "https://example.test/cal/", spec)
+
+    ics = mock_calendar.save_event.call_args[0][0]
+    cal = icalendar.Calendar.from_ical(ics)
+    event = next(iter(cal.walk("VEVENT")))
+    alarm = next(iter(event.walk("VALARM")))
+    # 1 day before, at 09:00 == 15 hours before midnight of the start date.
+    assert alarm["trigger"].dt == timedelta(hours=-15)
+
+
+@pytest.mark.asyncio
+async def test_all_day_reminder_time_of_day_is_configurable():
+    target = _make_target()
+    spec = EventSpec(
+        summary="Birthday",
+        start=datetime(2026, 10, 1, 9, 0),
+        all_day=True,
+        reminders=(ReminderSpec(minutes_before=1440, method="popup", time_of_day=time(18, 0)),),
+    )
+
+    _uid, mock_calendar = await _create_event(target, "https://example.test/cal/", spec)
+
+    ics = mock_calendar.save_event.call_args[0][0]
+    cal = icalendar.Calendar.from_ical(ics)
+    event = next(iter(cal.walk("VEVENT")))
+    alarm = next(iter(event.walk("VALARM")))
+    # 1 day before, at 18:00 == 6 hours before midnight of the start date.
+    assert alarm["trigger"].dt == timedelta(hours=-6)
+
+
+@pytest.mark.asyncio
 async def test_rrule_is_included_when_set():
     target = _make_target()
     spec = EventSpec(
@@ -272,7 +316,9 @@ async def test_missing_calendar_raises_calendar_not_found():
 
 
 def _mock_caldav_event(
-    summary: str, has_alarm: bool, start: datetime = datetime(2026, 10, 1, 9, 0, tzinfo=UTC)
+    summary: str,
+    has_alarm: bool,
+    start: datetime | date = datetime(2026, 10, 1, 9, 0, tzinfo=UTC),
 ) -> MagicMock:
     """A mock CalendarObjectResource wrapping a real icalendar.Event."""
     component = icalendar.Event()
@@ -346,6 +392,29 @@ async def test_backfill_ignores_event_with_a_different_summary():
 
     assert patched is False
     mock_event.save.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_backfill_reminder_anchors_all_day_event_to_time_of_day():
+    # The reactive listener passes a bare `date` (not `datetime`) for an
+    # all-day native calendar.create_event call -- the backfilled reminder
+    # must anchor to a sensible time of day, not "N minutes before midnight".
+    target = _make_target()
+    calendar_ref = "https://example.test/cal/"
+    mock_client, mock_calendar = _mock_client_with_calendar(calendar_ref)
+    mock_event = _mock_caldav_event("Birthday", has_alarm=False, start=date(2026, 10, 1))
+    mock_calendar.date_search.return_value = [mock_event]
+
+    with patch(
+        "custom_components.calendar_bridge.caldav_target.build_client", return_value=mock_client
+    ):
+        patched = await target.async_backfill_reminder(
+            calendar_ref, "Birthday", date(2026, 10, 1), 30, "popup"
+        )
+
+    assert patched is True
+    alarm = next(iter(mock_event.icalendar_component.walk("VALARM")))
+    assert alarm["trigger"].dt == timedelta(hours=-15)
 
 
 @pytest.mark.asyncio
@@ -424,6 +493,22 @@ async def test_poll_backfills_a_new_reminder_less_event():
     assert {e.uid for e in seen} == {"uid-1"}
     event.save.assert_called_once()
     assert list(event.icalendar_component.walk("VALARM"))
+
+
+@pytest.mark.asyncio
+async def test_poll_backfills_all_day_event_anchored_to_time_of_day():
+    target = _make_target()
+    calendar_ref = "https://example.test/cal/"
+    mock_calendar = MagicMock()
+    event = _mock_caldav_event("Birthday", has_alarm=False, start=date(2026, 10, 1))
+    event.icalendar_component.add("uid", "uid-1")
+    mock_calendar.date_search.return_value = [event]
+
+    seen = await _poll(target, calendar_ref, mock_calendar, known_uids=set())
+
+    assert seen is not None
+    alarm = next(iter(event.icalendar_component.walk("VALARM")))
+    assert alarm["trigger"].dt == timedelta(hours=-15)
 
 
 @pytest.mark.asyncio

@@ -24,6 +24,7 @@ from .target import (
     SeenEvent,
     all_day_bounds,
     as_utc,
+    effective_reminder_minutes,
 )
 
 if TYPE_CHECKING:
@@ -185,7 +186,9 @@ class CalDavCalendarTarget:
                 continue  # already has a reminder
             if dry_run:
                 return True
-            component.add_component(self._build_alarm(summary, method, minutes_before))
+            event_all_day = not isinstance(start, datetime)
+            effective_minutes = effective_reminder_minutes(event_all_day, minutes_before, None)
+            component.add_component(self._build_alarm(summary, method, effective_minutes))
             event.save()
             _LOGGER.info("Backfilled a %s reminder onto '%s'", method, summary)
             return True
@@ -264,7 +267,9 @@ class CalDavCalendarTarget:
                 continue
             if list(component.walk("VALARM")):
                 continue  # already has a reminder
-            component.add_component(self._build_alarm(summary, method, minutes_before))
+            event_all_day = not isinstance(start, datetime)
+            effective_minutes = effective_reminder_minutes(event_all_day, minutes_before, None)
+            component.add_component(self._build_alarm(summary, method, effective_minutes))
             event.save()
             _LOGGER.info("Backfilled a %s reminder onto '%s' (poll)", method, summary)
         return seen
@@ -301,8 +306,11 @@ class CalDavCalendarTarget:
             event.add("rrule", icalendar.vRecur.from_ical(spec.rrule))
 
         for reminder in spec.reminders:
+            effective_minutes = effective_reminder_minutes(
+                spec.all_day, reminder.minutes_before, reminder.time_of_day
+            )
             event.add_component(
-                self._build_alarm(spec.summary, reminder.method, reminder.minutes_before)
+                self._build_alarm(spec.summary, reminder.method, effective_minutes)
             )
 
         cal.add_component(event)

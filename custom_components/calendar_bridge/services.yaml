@@ -34,6 +34,9 @@ create_event:
           max: 40320
           mode: box
           unit_of_measurement: minutes
+    reminder_time:
+      selector:
+        time:
     reminders:
       selector:
         object:

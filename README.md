@@ -55,6 +55,12 @@ data:
   rrule: "FREQ=YEARLY"
 ```
 
+Reminder minutes are capped at 40320 (28 days) -- Google Calendar's own upper
+bound, enforced for both backends. For an all-day event, a reminder anchors
+to a specific time of day (`reminder_time`, default 9:00 AM) at least one day
+before the event, instead of "N minutes before midnight" -- set `reminder_time`
+explicitly to change it.
+
 ## Development
 
 ```bash

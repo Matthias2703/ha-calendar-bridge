@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 from typing import Any
 from unittest.mock import AsyncMock, patch
 from urllib.parse import quote
@@ -38,10 +38,19 @@ def _make_target() -> GoogleCalendarTarget:
 
 
 def _google_event(
-    event_id: str, summary: str, *, ical_uuid: str | None = None, has_reminder: bool = False
+    event_id: str,
+    summary: str,
+    *,
+    ical_uuid: str | None = None,
+    has_reminder: bool = False,
+    all_day: bool = False,
 ) -> GoogleEvent:
-    start = DateOrDatetime(dateTime=datetime(2026, 9, 10, 14, 0, tzinfo=UTC))
-    end = DateOrDatetime(dateTime=datetime(2026, 9, 10, 15, 0, tzinfo=UTC))
+    if all_day:
+        start = DateOrDatetime(date=date(2026, 9, 10))
+        end = DateOrDatetime(date=date(2026, 9, 11))
+    else:
+        start = DateOrDatetime(dateTime=datetime(2026, 9, 10, 14, 0, tzinfo=UTC))
+        end = DateOrDatetime(dateTime=datetime(2026, 9, 10, 15, 0, tzinfo=UTC))
     reminders = (
         Reminders(useDefault=False, overrides=[{"method": "popup", "minutes": 30}])
         if has_reminder
@@ -125,6 +134,57 @@ async def test_create_event_with_no_reminders_explicitly_disables_the_default():
 
 
 @pytest.mark.asyncio
+async def test_create_event_all_day_reminder_anchors_to_time_of_day_not_midnight():
+    # A naive "N minutes before start" override would fire at 23:30 the
+    # previous night for a 30-minute reminder on an all-day event (Google
+    # treats the override as relative to midnight of the start date) --
+    # it should instead anchor to a sensible time of day (default 9am), at
+    # least one day before.
+    target = _make_target()
+    auth = AsyncMock()
+    auth.post_json.return_value = {"id": "abc123", "iCalUID": "abc123@google.com"}
+    service = _FakeService()
+
+    with _patched(target, service, auth):
+        await target.async_create_event(
+            _CALENDAR_REF,
+            EventSpec(
+                summary="Birthday",
+                start=datetime(2026, 9, 10, 0, 0),
+                all_day=True,
+                reminders=(ReminderSpec(minutes_before=30),),
+            ),
+        )
+
+    body = auth.post_json.call_args.kwargs["json"]
+    # 1 day before, at 09:00 == 15 hours == 900 minutes before midnight.
+    assert body["reminders"]["overrides"] == [{"method": "popup", "minutes": 900}]
+
+
+@pytest.mark.asyncio
+async def test_create_event_all_day_reminder_time_of_day_is_configurable():
+    target = _make_target()
+    auth = AsyncMock()
+    auth.post_json.return_value = {"id": "abc123", "iCalUID": "abc123@google.com"}
+    service = _FakeService()
+
+    with _patched(target, service, auth):
+        await target.async_create_event(
+            _CALENDAR_REF,
+            EventSpec(
+                summary="Birthday",
+                start=datetime(2026, 9, 10, 0, 0),
+                all_day=True,
+                reminders=(ReminderSpec(minutes_before=1440, time_of_day=time(18, 0)),),
+            ),
+        )
+
+    body = auth.post_json.call_args.kwargs["json"]
+    # 1 day before, at 18:00 == 6 hours == 360 minutes before midnight.
+    assert body["reminders"]["overrides"] == [{"method": "popup", "minutes": 360}]
+
+
+@pytest.mark.asyncio
 async def test_create_event_raises_calendar_not_found_on_a_404():
     target = _make_target()
     auth = AsyncMock()
@@ -167,6 +227,21 @@ async def test_backfill_reminder_skips_an_event_that_already_has_one():
 
     assert patched is False
     service.async_patch_event.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_backfill_reminder_anchors_all_day_event_to_time_of_day():
+    target = _make_target()
+    service = _FakeService([_google_event("evt1", "Birthday", all_day=True)])
+
+    with _patched(target, service):
+        patched = await target.async_backfill_reminder(
+            _CALENDAR_REF, "Birthday", date(2026, 9, 10), 30, "popup"
+        )
+
+    assert patched is True
+    body = service.async_patch_event.call_args[0][2]
+    assert body["reminders"]["overrides"] == [{"method": "popup", "minutes": 900}]
 
 
 @pytest.mark.asyncio
@@ -216,6 +291,21 @@ async def test_poll_seen_event_carries_summary_and_start():
     assert seen == {
         SeenEvent(uid="evt1", summary="Dentist", start=datetime(2026, 9, 10, 14, 0, tzinfo=UTC))
     }
+
+
+@pytest.mark.asyncio
+async def test_poll_backfills_all_day_event_anchored_to_time_of_day():
+    target = _make_target()
+    service = _FakeService([_google_event("evt1", "Birthday", ical_uuid="uid-1", all_day=True)])
+
+    with _patched(target, service):
+        seen = await target.async_backfill_new_events(
+            _CALENDAR_REF, set(), 30, "popup", _LOOKAHEAD, False
+        )
+
+    assert seen is not None
+    body = service.async_patch_event.call_args[0][2]
+    assert body["reminders"]["overrides"] == [{"method": "popup", "minutes": 900}]
 
 
 @pytest.mark.asyncio

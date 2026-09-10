@@ -35,6 +35,7 @@ from .target import (
     ReminderMethod,
     SeenEvent,
     all_day_bounds,
+    effective_reminder_minutes,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -155,7 +156,10 @@ def _build_event(spec: EventSpec) -> GoogleEvent:
         useDefault=False,
         overrides=[
             ReminderOverride(
-                method=_REMINDER_METHOD_MAP[reminder.method], minutes=reminder.minutes_before
+                method=_REMINDER_METHOD_MAP[reminder.method],
+                minutes=effective_reminder_minutes(
+                    spec.all_day, reminder.minutes_before, reminder.time_of_day
+                ),
             )
             for reminder in spec.reminders
         ],
@@ -228,8 +232,14 @@ class GoogleCalendarTarget:
                         continue
                     if dry_run:
                         return True
+                    event_all_day = event.start.date_time is None
+                    effective_minutes = effective_reminder_minutes(
+                        event_all_day, minutes_before, None
+                    )
                     await service.async_patch_event(
-                        calendar_ref, cast(str, event.id), _reminder_body(method, minutes_before)
+                        calendar_ref,
+                        cast(str, event.id),
+                        _reminder_body(method, effective_minutes),
                     )
                     _LOGGER.info("Backfilled a %s reminder onto '%s'", method, summary)
                     return True
@@ -278,8 +288,14 @@ class GoogleCalendarTarget:
                     seen.add(SeenEvent(uid=uid, summary=event.summary, start=event.start.value))
                     if uid in known_uids or skip_backfill or _has_explicit_reminder(event):
                         continue
+                    event_all_day = event.start.date_time is None
+                    effective_minutes = effective_reminder_minutes(
+                        event_all_day, minutes_before, None
+                    )
                     await service.async_patch_event(
-                        calendar_ref, cast(str, event.id), _reminder_body(method, minutes_before)
+                        calendar_ref,
+                        cast(str, event.id),
+                        _reminder_body(method, effective_minutes),
                     )
                     _LOGGER.info("Backfilled a %s reminder onto '%s' (poll)", method, event.summary)
         except ApiException:

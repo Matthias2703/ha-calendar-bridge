@@ -225,9 +225,13 @@
           "name": "Reminder minutes",
           "description": "Minutes before the event to show a single popup reminder. Ignored if 'reminders' is set."
         },
+        "reminder_time": {
+          "name": "Reminder time",
+          "description": "For all-day events only: the time of day the reminder should fire (default 9:00 AM). Ignored for timed events."
+        },
         "reminders": {
           "name": "Reminders",
-          "description": "Up to 5 reminders. Each entry needs a method (popup or email) and minutes_before."
+          "description": "Up to 5 reminders. Each entry needs a method (popup or email) and minutes_before, and may optionally set reminder_time (all-day events only)."
         },
         "rrule": {
           "name": "Recurrence rule",

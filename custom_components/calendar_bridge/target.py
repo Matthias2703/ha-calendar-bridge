@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time, timedelta
 from typing import Literal, Protocol
 
 from homeassistant.util import dt as dt_util
@@ -15,6 +16,11 @@ ReminderMethod = Literal["popup", "email"]
 # backends default a missing `end` to this.
 DEFAULT_EVENT_DURATION = timedelta(hours=1)
 
+# Matches Google Calendar's own UI default for an all-day event's reminder
+# ("1 day before, at 9am") -- used whenever a reminder doesn't specify its own
+# `time_of_day`.
+DEFAULT_ALL_DAY_REMINDER_TIME = time(9, 0)
+
 
 @dataclass(frozen=True, slots=True)
 class ReminderSpec:
@@ -22,6 +28,8 @@ class ReminderSpec:
 
     minutes_before: int
     method: ReminderMethod = "popup"
+    # Only consulted for all-day events -- see `effective_reminder_minutes`.
+    time_of_day: time | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -65,6 +73,29 @@ def as_utc(value: datetime | date) -> datetime | date:
     if isinstance(value, datetime):
         return dt_util.as_utc(value)
     return value
+
+
+def effective_reminder_minutes(all_day: bool, minutes_before: int, time_of_day: time | None) -> int:
+    """Translate `minutes_before` into "minutes before midnight of the start date".
+
+    For a timed event, `minutes_before` already means what it says -- N
+    minutes before DTSTART -- and is returned unchanged.
+
+    For an all-day event, DTSTART is midnight, so the same naive math fires
+    at an odd time (e.g. 23:30 the previous night for a 30-minute reminder)
+    instead of a sensible one. This floors the lead time to whole days
+    (rounding up, minimum 1 day, so the reminder is never later than a plain
+    "N minutes before" would suggest and never fires the same day after its
+    own anchor time already passed) and re-anchors the trigger to
+    `time_of_day` (default 09:00, see `DEFAULT_ALL_DAY_REMINDER_TIME`) on the
+    resulting day.
+    """
+    if not all_day:
+        return minutes_before
+    anchor = time_of_day or DEFAULT_ALL_DAY_REMINDER_TIME
+    anchor_minutes = anchor.hour * 60 + anchor.minute
+    days_before = max(1, math.ceil(minutes_before / 1440))
+    return days_before * 1440 - anchor_minutes
 
 
 def all_day_bounds(start: datetime | date, end: datetime | date | None) -> tuple[date, date]:
