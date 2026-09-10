@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -11,6 +12,7 @@ from homeassistant.exceptions import ServiceValidationError
 
 from custom_components.calendar_bridge.const import (
     ATTR_ALL_DAY,
+    ATTR_OCCURRENCE,
     ATTR_REMINDER_MINUTES,
     ATTR_SUMMARY,
     ATTR_UID,
@@ -57,8 +59,27 @@ async def test_delete_event_calls_the_target_and_returns_deleted_true():
             hass, _call({ATTR_DEVICE_ID: _DEVICE_ID, ATTR_UID: "uid-1"})
         )
 
-    target.async_delete_event.assert_awaited_once_with(_CALENDAR_URL, "uid-1")
+    target.async_delete_event.assert_awaited_once_with(_CALENDAR_URL, "uid-1", None)
     assert result == {"deleted": True}
+
+
+@pytest.mark.asyncio
+async def test_delete_event_passes_the_occurrence_through():
+    target = MagicMock()
+    target.async_delete_event = AsyncMock(return_value=True)
+    hass, entry = _make_hass_and_entry(target)
+    occurrence = datetime(2026, 10, 3, 9, 0, tzinfo=UTC)
+
+    with patch(
+        "custom_components.calendar_bridge.services.async_resolve_device",
+        return_value=(entry, "sub1"),
+    ):
+        await async_handle_delete_event(
+            hass,
+            _call({ATTR_DEVICE_ID: _DEVICE_ID, ATTR_UID: "uid-1", ATTR_OCCURRENCE: occurrence}),
+        )
+
+    target.async_delete_event.assert_awaited_once_with(_CALENDAR_URL, "uid-1", occurrence)
 
 
 @pytest.mark.asyncio
@@ -168,6 +189,32 @@ async def test_update_event_builds_reminders_from_reminder_minutes():
     assert updates.all_day is True
     assert updates.reminders is not None
     assert updates.reminders[0].minutes_before == 45
+
+
+@pytest.mark.asyncio
+async def test_update_event_passes_the_occurrence_through():
+    target = MagicMock()
+    target.async_update_event = AsyncMock(return_value=True)
+    hass, entry = _make_hass_and_entry(target)
+    occurrence = datetime(2026, 10, 3, 9, 0, tzinfo=UTC)
+
+    with patch(
+        "custom_components.calendar_bridge.services.async_resolve_device",
+        return_value=(entry, "sub1"),
+    ):
+        await async_handle_update_event(
+            hass,
+            _call(
+                {
+                    ATTR_DEVICE_ID: _DEVICE_ID,
+                    ATTR_UID: "uid-1",
+                    ATTR_OCCURRENCE: occurrence,
+                    ATTR_SUMMARY: "New",
+                }
+            ),
+        )
+
+    assert target.async_update_event.call_args[0][3] == occurrence
 
 
 @pytest.mark.asyncio

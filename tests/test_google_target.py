@@ -99,6 +99,19 @@ def _auth_finding(event_id: str | None) -> AsyncMock:
     return auth
 
 
+def _auth_finding_instances(master_id: str, instance_items: list[dict[str, Any]]) -> AsyncMock:
+    """A fake auth: iCalUID lookup resolves to master_id, /instances resolves to instance_items."""
+    auth = AsyncMock()
+
+    async def get_json(url: str, params: dict[str, Any] | None = None, **kwargs: Any):
+        if "/instances" in url:
+            return {"items": instance_items}
+        return {"items": [{"id": master_id}]}
+
+    auth.get_json = AsyncMock(side_effect=get_json)
+    return auth
+
+
 @pytest.mark.asyncio
 async def test_create_event_posts_the_built_body_and_returns_the_ical_uid():
     target = _make_target()
@@ -534,3 +547,72 @@ async def test_update_event_returns_false_on_api_error():
         )
 
     assert updated is False
+
+
+@pytest.mark.asyncio
+async def test_delete_event_with_occurrence_resolves_the_specific_instance():
+    target = _make_target()
+    service = _FakeService()
+    occurrence = datetime(2026, 10, 3, 9, 0, tzinfo=UTC)
+    instance_items = [
+        {
+            "id": "master1_20261003T090000Z",
+            "originalStartTime": {"dateTime": "2026-10-03T09:00:00Z"},
+        },
+        {
+            "id": "master1_20261004T090000Z",
+            "originalStartTime": {"dateTime": "2026-10-04T09:00:00Z"},
+        },
+    ]
+    auth = _auth_finding_instances("master1", instance_items)
+
+    with _patched(target, service, auth):
+        deleted = await target.async_delete_event(
+            _CALENDAR_REF, "series-uid", occurrence=occurrence
+        )
+
+    assert deleted is True
+    service.async_delete_event.assert_awaited_once_with(_CALENDAR_REF, "master1_20261003T090000Z")
+
+
+@pytest.mark.asyncio
+async def test_delete_event_with_occurrence_not_found_returns_false():
+    target = _make_target()
+    service = _FakeService()
+    auth = _auth_finding_instances("master1", [])
+
+    with _patched(target, service, auth):
+        deleted = await target.async_delete_event(
+            _CALENDAR_REF, "series-uid", occurrence=datetime(2026, 12, 25, 9, 0, tzinfo=UTC)
+        )
+
+    assert deleted is False
+    service.async_delete_event.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_update_event_with_occurrence_patches_the_specific_instance():
+    target = _make_target()
+    occurrence = datetime(2026, 10, 3, 9, 0, tzinfo=UTC)
+    instance = _google_event("master1_20261003T090000Z", "Standup", ical_uuid="series-uid")
+    service = _FakeService(get_event=instance)
+    instance_items = [
+        {
+            "id": "master1_20261003T090000Z",
+            "originalStartTime": {"dateTime": "2026-10-03T09:00:00Z"},
+        },
+    ]
+    auth = _auth_finding_instances("master1", instance_items)
+
+    with _patched(target, service, auth):
+        updated = await target.async_update_event(
+            _CALENDAR_REF,
+            "series-uid",
+            EventUpdate(summary="Standup (moved)"),
+            occurrence=occurrence,
+        )
+
+    assert updated is True
+    service.async_patch_event.assert_awaited_once_with(
+        _CALENDAR_REF, "master1_20261003T090000Z", {"summary": "Standup (moved)"}
+    )

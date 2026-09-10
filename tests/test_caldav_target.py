@@ -886,3 +886,129 @@ async def test_create_event_starts_reauth_and_still_raises_on_auth_error():
         await target.async_create_event("https://example.test/cal/", spec)
 
     mock_entry.async_start_reauth.assert_called_once_with(hass)
+
+
+def _mock_recurring_event(uid: str, start: datetime, rrule: str = "FREQ=DAILY") -> MagicMock:
+    """A mock CalendarObjectResource wrapping a real recurring master VEVENT."""
+    cal = icalendar.Calendar()
+    master = icalendar.Event()
+    master.add("uid", uid)
+    master.add("summary", "Standup")
+    master.add("dtstart", start)
+    master.add("dtend", start + timedelta(minutes=30))
+    master.add("rrule", icalendar.vRecur.from_ical(rrule))
+    cal.add_component(master)
+    mock_event = MagicMock()
+    mock_event.icalendar_instance = cal
+    mock_event.icalendar_component = master
+    return mock_event
+
+
+def _vevents(cal: icalendar.Calendar) -> list[icalendar.Event]:
+    return [c for c in cal.subcomponents if isinstance(c, icalendar.Event)]
+
+
+@pytest.mark.asyncio
+async def test_update_event_with_occurrence_creates_an_exception_vevent():
+    target = _make_target()
+    calendar_ref = "https://example.test/cal/"
+    mock_client, mock_calendar = _mock_client_with_calendar(calendar_ref)
+    mock_event = _mock_recurring_event("series-1", datetime(2026, 10, 1, 9, 0, tzinfo=UTC))
+    mock_calendar.event_by_uid.return_value = mock_event
+    occurrence = datetime(2026, 10, 3, 9, 0, tzinfo=UTC)
+
+    with patch(
+        "custom_components.calendar_bridge.caldav_target.build_client", return_value=mock_client
+    ):
+        updated = await target.async_update_event(
+            calendar_ref,
+            "series-1",
+            EventUpdate(summary="Standup (moved)", start=datetime(2026, 10, 3, 10, 0, tzinfo=UTC)),
+            occurrence=occurrence,
+        )
+
+    assert updated is True
+    vevents = _vevents(mock_event.icalendar_instance)
+    assert len(vevents) == 2
+    master = next(v for v in vevents if "RECURRENCE-ID" not in v)
+    exception = next(v for v in vevents if "RECURRENCE-ID" in v)
+    # The master (and the rest of the series) is untouched.
+    assert master["dtstart"].dt == datetime(2026, 10, 1, 9, 0, tzinfo=UTC)
+    assert str(master["summary"]) == "Standup"
+    # Only the targeted occurrence changed.
+    assert exception["recurrence-id"].dt == occurrence
+    assert str(exception["summary"]) == "Standup (moved)"
+    assert exception["dtstart"].dt == datetime(2026, 10, 3, 10, 0, tzinfo=UTC)
+    mock_event.save.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_update_event_with_occurrence_twice_reuses_the_same_exception():
+    target = _make_target()
+    calendar_ref = "https://example.test/cal/"
+    mock_client, mock_calendar = _mock_client_with_calendar(calendar_ref)
+    mock_event = _mock_recurring_event("series-1", datetime(2026, 10, 1, 9, 0, tzinfo=UTC))
+    mock_calendar.event_by_uid.return_value = mock_event
+    occurrence = datetime(2026, 10, 3, 9, 0, tzinfo=UTC)
+
+    with patch(
+        "custom_components.calendar_bridge.caldav_target.build_client", return_value=mock_client
+    ):
+        await target.async_update_event(
+            calendar_ref, "series-1", EventUpdate(summary="First edit"), occurrence=occurrence
+        )
+        await target.async_update_event(
+            calendar_ref, "series-1", EventUpdate(location="Room 2"), occurrence=occurrence
+        )
+
+    vevents = _vevents(mock_event.icalendar_instance)
+    assert len(vevents) == 2  # still just master + one exception, not two exceptions
+    exception = next(v for v in vevents if "RECURRENCE-ID" in v)
+    assert str(exception["summary"]) == "First edit"
+    assert str(exception["location"]) == "Room 2"
+
+
+@pytest.mark.asyncio
+async def test_delete_event_with_occurrence_adds_exdate_to_the_master():
+    target = _make_target()
+    calendar_ref = "https://example.test/cal/"
+    mock_client, mock_calendar = _mock_client_with_calendar(calendar_ref)
+    mock_event = _mock_recurring_event("series-1", datetime(2026, 10, 1, 9, 0, tzinfo=UTC))
+    mock_calendar.event_by_uid.return_value = mock_event
+    occurrence = datetime(2026, 10, 5, 9, 0, tzinfo=UTC)
+
+    with patch(
+        "custom_components.calendar_bridge.caldav_target.build_client", return_value=mock_client
+    ):
+        deleted = await target.async_delete_event(calendar_ref, "series-1", occurrence=occurrence)
+
+    assert deleted is True
+    master = _vevents(mock_event.icalendar_instance)[0]
+    exdates = master.get("exdate")
+    exdates = exdates if isinstance(exdates, list) else [exdates]
+    assert [d.dt for prop in exdates for d in prop.dts] == [occurrence]
+    mock_event.save.assert_called_once()
+    mock_event.delete.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_delete_event_with_occurrence_also_removes_its_existing_exception():
+    target = _make_target()
+    calendar_ref = "https://example.test/cal/"
+    mock_client, mock_calendar = _mock_client_with_calendar(calendar_ref)
+    mock_event = _mock_recurring_event("series-1", datetime(2026, 10, 1, 9, 0, tzinfo=UTC))
+    mock_calendar.event_by_uid.return_value = mock_event
+    occurrence = datetime(2026, 10, 3, 9, 0, tzinfo=UTC)
+
+    with patch(
+        "custom_components.calendar_bridge.caldav_target.build_client", return_value=mock_client
+    ):
+        await target.async_update_event(
+            calendar_ref, "series-1", EventUpdate(summary="Edited"), occurrence=occurrence
+        )
+        assert len(_vevents(mock_event.icalendar_instance)) == 2
+
+        deleted = await target.async_delete_event(calendar_ref, "series-1", occurrence=occurrence)
+
+    assert deleted is True
+    assert len(_vevents(mock_event.icalendar_instance)) == 1

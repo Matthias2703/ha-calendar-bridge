@@ -57,6 +57,9 @@ delete_event:
       required: true
       selector:
         text:
+    occurrence:
+      selector:
+        datetime:
 update_event:
   fields:
     device_id:
@@ -68,6 +71,9 @@ update_event:
       required: true
       selector:
         text:
+    occurrence:
+      selector:
+        datetime:
     summary:
       selector:
         text:

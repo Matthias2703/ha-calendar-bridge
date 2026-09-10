@@ -26,6 +26,7 @@ from .const import (
     ATTR_NOTIFY,
     ATTR_NOTIFY_MESSAGE,
     ATTR_NOTIFY_TARGET,
+    ATTR_OCCURRENCE,
     ATTR_REMINDER_MINUTES,
     ATTR_REMINDER_TIME,
     ATTR_REMINDERS,
@@ -102,6 +103,7 @@ DELETE_EVENT_SCHEMA = vol.Schema(
     {
         vol.Optional(ATTR_DEVICE_ID): cv.string,
         vol.Required(ATTR_UID): cv.string,
+        vol.Optional(ATTR_OCCURRENCE): cv.datetime,
     }
 )
 
@@ -109,6 +111,7 @@ UPDATE_EVENT_SCHEMA = vol.Schema(
     {
         vol.Optional(ATTR_DEVICE_ID): cv.string,
         vol.Required(ATTR_UID): cv.string,
+        vol.Optional(ATTR_OCCURRENCE): cv.datetime,
         vol.Optional(ATTR_SUMMARY): cv.string,
         vol.Optional(ATTR_START): cv.datetime,
         vol.Optional(ATTR_END): cv.datetime,
@@ -243,12 +246,14 @@ def _async_resolve_single_device(
 
 
 async def async_handle_delete_event(hass: HomeAssistant, call: ServiceCall) -> ServiceResponse:
-    """Delete one event, identified by its UID, from a calendar."""
+    """Delete one event (or one occurrence of a recurring one), identified by its UID."""
     entry, subentry_id = _async_resolve_single_device(hass, call.data)
     subentry = entry.subentries[subentry_id]
     target = entry.runtime_data
 
-    deleted = await target.async_delete_event(subentry.data[CONF_CALENDAR_URL], call.data[ATTR_UID])
+    deleted = await target.async_delete_event(
+        subentry.data[CONF_CALENDAR_URL], call.data[ATTR_UID], call.data.get(ATTR_OCCURRENCE)
+    )
     if not deleted:
         raise ServiceValidationError(
             translation_domain=DOMAIN,
@@ -275,7 +280,10 @@ async def async_handle_update_event(hass: HomeAssistant, call: ServiceCall) -> S
         rrule=call.data.get(ATTR_RRULE),
     )
     updated = await target.async_update_event(
-        subentry.data[CONF_CALENDAR_URL], call.data[ATTR_UID], updates
+        subentry.data[CONF_CALENDAR_URL],
+        call.data[ATTR_UID],
+        updates,
+        call.data.get(ATTR_OCCURRENCE),
     )
     if not updated:
         raise ServiceValidationError(

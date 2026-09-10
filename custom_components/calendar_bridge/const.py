@@ -59,6 +59,7 @@ ATTR_METHOD = "method"
 ATTR_MINUTES_BEFORE = "minutes_before"
 ATTR_TIME_OF_DAY = "time_of_day"
 ATTR_UID = "uid"
+ATTR_OCCURRENCE = "occurrence"
 
 ATTR_NOTIFY = "notify"
 ATTR_NOTIFY_TARGET = "target"

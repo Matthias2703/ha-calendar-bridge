@@ -278,6 +278,10 @@
         "uid": {
           "name": "Termin-UID",
           "description": "Die uid des Termins, wie von create_event zurückgegeben (das Feld 'created' in dessen Antwort)."
+        },
+        "occurrence": {
+          "name": "Vorkommen",
+          "description": "Bei einem wiederkehrenden Termin: der ursprüngliche Start-Zeitpunkt des einzelnen Vorkommens, das gelöscht werden soll. Leer lassen, um die ganze Serie zu löschen."
         }
       }
     },
@@ -292,6 +296,10 @@
         "uid": {
           "name": "Termin-UID",
           "description": "Die uid des Termins, wie von create_event zurückgegeben (das Feld 'created' in dessen Antwort)."
+        },
+        "occurrence": {
+          "name": "Vorkommen",
+          "description": "Bei einem wiederkehrenden Termin: der ursprüngliche Start-Zeitpunkt des einzelnen Vorkommens, das geändert werden soll. Leer lassen, um die ganze Serie zu ändern."
         },
         "summary": {
           "name": "Titel",

@@ -198,18 +198,36 @@ class CalendarTarget(Protocol):
         """
         ...
 
-    async def async_delete_event(self, calendar_ref: str, uid: str) -> bool:
+    async def async_delete_event(
+        self, calendar_ref: str, uid: str, occurrence: datetime | date | None = None
+    ) -> bool:
         """Delete the event identified by uid.
 
-        Returns False if no such event was found (or the calendar couldn't
-        be reached), True if it was deleted.
+        `occurrence` is the original start time of one instance of a
+        recurring series -- when given, only that occurrence is removed
+        (as an EXDATE/exception), leaving the rest of the series intact.
+        `None` (the default) deletes the whole event/series.
+
+        Returns False if no such event (or occurrence) was found, or the
+        calendar couldn't be reached; True if it was deleted.
         """
         ...
 
-    async def async_update_event(self, calendar_ref: str, uid: str, updates: EventUpdate) -> bool:
+    async def async_update_event(
+        self,
+        calendar_ref: str,
+        uid: str,
+        updates: EventUpdate,
+        occurrence: datetime | date | None = None,
+    ) -> bool:
         """Apply `updates` (only its non-None fields) to the event identified by uid.
 
-        Returns False if no such event was found (or the calendar couldn't
-        be reached), True if it was updated.
+        `occurrence` is the original start time of one instance of a
+        recurring series -- when given, only that occurrence is changed (as
+        a RECURRENCE-ID exception), leaving the rest of the series intact.
+        `None` (the default) updates the whole event/series.
+
+        Returns False if no such event (or occurrence) was found, or the
+        calendar couldn't be reached; True if it was updated.
         """
         ...

@@ -17,7 +17,12 @@ from datetime import UTC, date, datetime, timedelta
 from typing import Any, cast
 from urllib.parse import quote
 
-from gcal_sync.api import CALENDAR_EVENTS_URL, GoogleCalendarService, ListEventsRequest
+from gcal_sync.api import (
+    CALENDAR_EVENTS_URL,
+    INSTANCES_URL,
+    GoogleCalendarService,
+    ListEventsRequest,
+)
 from gcal_sync.auth import AbstractAuth
 from gcal_sync.exceptions import ApiException
 from gcal_sync.model import Calendar, DateOrDatetime, ReminderOverride, Reminders
@@ -379,11 +384,71 @@ class GoogleCalendarTarget:
             return None
         return cast(str, items[0]["id"])
 
-    async def async_delete_event(self, calendar_ref: str, uid: str) -> bool:
-        """Delete the event identified by uid. Returns False if it can't be found."""
+    async def _async_find_instance_id(
+        self,
+        calendar_ref: str,
+        auth: AbstractAuth,
+        master_event_id: str,
+        occurrence: datetime | date,
+    ) -> str | None:
+        """Resolve one occurrence of a recurring event to its own instance event id.
+
+        Each instance of a Google recurring event has its own unique id,
+        distinct from the master's -- `events.instances` (not wrapped by
+        `GoogleCalendarService`, hence the raw request) is the documented way
+        to list them and find the one whose original start matches
+        `occurrence`.
+        """
+        occurrence_dt = _as_utc_datetime(occurrence)
+        window = timedelta(hours=1)
+        response = await auth.get_json(
+            INSTANCES_URL.format(
+                calendar_id=quote(calendar_ref, safe=""), event_id=quote(master_event_id, safe="")
+            ),
+            params={
+                "timeMin": (occurrence_dt - window).isoformat(),
+                "timeMax": (occurrence_dt + window).isoformat(),
+            },
+        )
+        for item in response.get("items") or []:
+            original_start = item.get("originalStartTime") or {}
+            raw = original_start.get("dateTime") or original_start.get("date")
+            if not raw:
+                continue
+            parsed = dt_util.parse_datetime(raw) or dt_util.parse_date(raw)
+            if parsed is None:
+                continue
+            if isinstance(parsed, datetime):
+                matches = dt_util.as_utc(parsed) == occurrence_dt
+            else:
+                occurrence_date = (
+                    occurrence.date() if isinstance(occurrence, datetime) else occurrence
+                )
+                matches = parsed == occurrence_date
+            if matches:
+                return cast(str, item["id"])
+        return None
+
+    async def _async_resolve_event_id(
+        self,
+        calendar_ref: str,
+        auth: AbstractAuth,
+        uid: str,
+        occurrence: datetime | date | None,
+    ) -> str | None:
+        """Resolve uid (and optionally one occurrence of it) to a concrete event id."""
+        event_id = await self._async_find_event_id(calendar_ref, auth, uid)
+        if event_id is None or occurrence is None:
+            return event_id
+        return await self._async_find_instance_id(calendar_ref, auth, event_id, occurrence)
+
+    async def async_delete_event(
+        self, calendar_ref: str, uid: str, occurrence: datetime | date | None = None
+    ) -> bool:
+        """Delete the event (or one occurrence of it) identified by uid."""
         service, auth = await self._async_service()
         try:
-            event_id = await self._async_find_event_id(calendar_ref, auth, uid)
+            event_id = await self._async_resolve_event_id(calendar_ref, auth, uid, occurrence)
             if event_id is None:
                 return False
             await service.async_delete_event(calendar_ref, event_id)
@@ -392,11 +457,17 @@ class GoogleCalendarTarget:
             return False
         return True
 
-    async def async_update_event(self, calendar_ref: str, uid: str, updates: EventUpdate) -> bool:
-        """Apply `updates` to the event identified by uid. Returns False if not found."""
+    async def async_update_event(
+        self,
+        calendar_ref: str,
+        uid: str,
+        updates: EventUpdate,
+        occurrence: datetime | date | None = None,
+    ) -> bool:
+        """Apply `updates` to the event (or one occurrence of it) identified by uid."""
         service, auth = await self._async_service()
         try:
-            event_id = await self._async_find_event_id(calendar_ref, auth, uid)
+            event_id = await self._async_resolve_event_id(calendar_ref, auth, uid, occurrence)
             if event_id is None:
                 return False
             needs_current = (

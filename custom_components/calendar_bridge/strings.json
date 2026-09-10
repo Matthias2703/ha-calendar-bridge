@@ -278,6 +278,10 @@
         "uid": {
           "name": "Event UID",
           "description": "The event's uid, as returned by create_event (the 'created' field in its response)."
+        },
+        "occurrence": {
+          "name": "Occurrence",
+          "description": "For a recurring event: the original start date/time of the single occurrence to delete. Leave empty to delete the whole series."
         }
       }
     },
@@ -292,6 +296,10 @@
         "uid": {
           "name": "Event UID",
           "description": "The event's uid, as returned by create_event (the 'created' field in its response)."
+        },
+        "occurrence": {
+          "name": "Occurrence",
+          "description": "For a recurring event: the original start date/time of the single occurrence to change. Leave empty to change the whole series."
         },
         "summary": {
           "name": "Summary",

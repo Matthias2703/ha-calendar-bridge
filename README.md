@@ -17,7 +17,7 @@ Calendar Bridge talks directly to the Google Calendar REST API and to CalDAV (vi
 ## Features
 
 - `calendar_bridge.create_event` service — one/multiple reminders (popup or email), recurrence (`rrule`), all-day events
-- `calendar_bridge.delete_event` / `calendar_bridge.update_event` services — delete or change (only the fields you pass) an event you previously created, by its `uid`
+- `calendar_bridge.delete_event` / `calendar_bridge.update_event` services — delete or change (only the fields you pass) an event you previously created, by its `uid`; pass `occurrence` to target a single instance of a recurring event instead of the whole series
 - Backends: **Google Calendar** (reuses an existing core "Google Calendar" account's sign-in — no separate OAuth consent or Client ID/Secret) and **CalDAV** (e.g. iCloud)
 - Multiple target calendars per account via Config Subentries, each exposed as its own device for a clean device picker in the service UI
 - Optional **per-event Home Assistant notification**: `create_event`'s `notify` field sends a notification (e.g. to your phone) at a configurable time before that one event — independent of, or in addition to, the native Google/iOS reminder
@@ -69,6 +69,17 @@ data:
   uid: <uid returned by create_event>
   start: "2026-10-02 14:00:00"
   end: "2026-10-02 14:30:00"
+```
+
+For a recurring event, add `occurrence` (the original start date/time of one instance) to change or delete just that occurrence instead of the whole series:
+
+```yaml
+action: calendar_bridge.delete_event
+target:
+  device_id: <device id of the target calendar>
+data:
+  uid: <uid returned by create_event>
+  occurrence: "2026-10-15 09:00:00"
 ```
 
 Reminder minutes are capped at 40320 (28 days) -- Google Calendar's own upper
