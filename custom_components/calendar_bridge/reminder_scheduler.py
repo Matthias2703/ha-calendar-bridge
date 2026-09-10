@@ -40,6 +40,10 @@ class ReminderScheduler:
         self._store: Store[dict[str, Any]] = Store(hass, _STORAGE_VERSION, _STORAGE_KEY)
         self._unsub: dict[str, Any] = {}
 
+    def pending_count(self) -> int:
+        """How many HA-notification reminders are currently scheduled (for diagnostics)."""
+        return len(self._unsub)
+
     async def async_load(self) -> None:
         """Reschedule reminders that were pending before a restart."""
         data = await self._store.async_load() or {"reminders": []}

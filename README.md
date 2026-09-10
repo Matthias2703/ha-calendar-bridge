@@ -24,6 +24,8 @@ Calendar Bridge talks directly to the Google Calendar REST API and to CalDAV (vi
 - Optional **per-calendar Home Assistant notification**: turn it on once for a calendar (its own switch + lead-time entity, no YAML) and every event detected there — created via `create_event`, the native "+" button, an automation, or directly in the Google/iOS app — gets an HA notification automatically
 - A **"Send test notification" button** per calendar to verify the notify target/setup immediately, without waiting for a real event
 - Per-calendar defaults: default reminder minutes, default reminder method, and a default target calendar so `create_event` calls can omit those fields entirely
+- A CalDAV account whose password changes or expires prompts the standard Home Assistant "re-authenticate" repair flow instead of failing silently
+- Diagnostics download (Settings → Devices & Services → Calendar Bridge → ⋮ → Download diagnostics) for troubleshooting -- never includes your password or calendar addresses
 
 ## Installation
 
