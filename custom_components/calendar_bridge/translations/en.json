@@ -87,6 +87,13 @@
           "notify_minutes_before": "How many minutes before the event start the Home Assistant notification is sent.",
           "notify_message_template": "Supports {summary}/{start} placeholders. Leave blank for the default 'Reminder: {summary}'."
         }
+      },
+      "reauth_confirm": {
+        "title": "Re-enter your CalDAV password",
+        "description": "Calendar Bridge could no longer sign in to this CalDAV account. Enter the current password to reconnect.",
+        "data": {
+          "password": "Password"
+        }
       }
     },
     "error": {
@@ -96,7 +103,8 @@
     "abort": {
       "already_configured": "This account is already configured.",
       "no_google_account": "No Google Calendar integration found. Set up Home Assistant's built-in 'Google Calendar' integration first, then add it here.",
-      "cannot_connect": "Could not connect to the server."
+      "cannot_connect": "Could not connect to the server.",
+      "reauth_successful": "Re-authentication was successful."
     }
   },
   "config_subentries": {

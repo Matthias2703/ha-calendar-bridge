@@ -87,6 +87,13 @@
           "notify_minutes_before": "Wie viele Minuten vor Terminbeginn die Home-Assistant-Benachrichtigung gesendet wird.",
           "notify_message_template": "Unterstützt die Platzhalter {summary}/{start}. Leer lassen für den Standardtext 'Reminder: {summary}'."
         }
+      },
+      "reauth_confirm": {
+        "title": "CalDAV-Passwort erneut eingeben",
+        "description": "Calendar Bridge konnte sich bei diesem CalDAV-Konto nicht mehr anmelden. Gib das aktuelle Passwort ein, um die Verbindung wiederherzustellen.",
+        "data": {
+          "password": "Passwort"
+        }
       }
     },
     "error": {
@@ -96,7 +103,8 @@
     "abort": {
       "already_configured": "Dieses Konto ist bereits konfiguriert.",
       "no_google_account": "Keine Google-Kalender-Integration gefunden. Richte zuerst Home Assistants eingebaute 'Google Kalender'-Integration ein, dann füge sie hier hinzu.",
-      "cannot_connect": "Verbindung zum Server nicht möglich."
+      "cannot_connect": "Verbindung zum Server nicht möglich.",
+      "reauth_successful": "Die erneute Authentifizierung war erfolgreich."
     }
   },
   "config_subentries": {

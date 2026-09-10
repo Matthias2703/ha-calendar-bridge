@@ -334,6 +334,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: CalendarBridgeConfigEntr
     else:
         entry.runtime_data = CalDavCalendarTarget(
             hass,
+            entry.entry_id,
             entry.data[CONF_URL],
             entry.data[CONF_USERNAME],
             entry.data[CONF_PASSWORD],

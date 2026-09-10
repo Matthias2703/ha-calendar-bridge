@@ -9,6 +9,7 @@ all when at least one such account exists.
 from __future__ import annotations
 
 import logging
+from collections.abc import Mapping
 from typing import Any
 
 import caldav
@@ -208,6 +209,39 @@ class CalendarBridgeConfigFlow(ConfigFlow, domain=DOMAIN):
             }
         )
         return self.async_show_form(step_id="caldav_existing", data_schema=schema, errors=errors)
+
+    async def async_step_reauth(self, entry_data: Mapping[str, Any]) -> ConfigFlowResult:
+        """Start a reauth flow after a CalDAV account's credentials are rejected.
+
+        Google entries never trigger this -- they reuse an existing core
+        `google` account's own OAuth session, which has no password of its
+        own for this integration to get wrong.
+        """
+        return await self.async_step_reauth_confirm()
+
+    async def async_step_reauth_confirm(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Ask for a new password and verify it before saving."""
+        reauth_entry = self._get_reauth_entry()
+        errors: dict[str, str] = {}
+
+        if user_input is not None:
+            data = {**reauth_entry.data, CONF_PASSWORD: user_input[CONF_PASSWORD]}
+            client = build_client(
+                data[CONF_URL], data[CONF_USERNAME], data[CONF_PASSWORD], data[CONF_VERIFY_SSL]
+            )
+            try:
+                await self.hass.async_add_executor_job(discover_calendars, client)
+            except CalDavAuthError:
+                errors["base"] = "invalid_auth"
+            except CalDavConnectionError:
+                errors["base"] = "cannot_connect"
+            else:
+                return self.async_update_reload_and_abort(reauth_entry, data=data)
+
+        schema = vol.Schema({vol.Required(CONF_PASSWORD): str})
+        return self.async_show_form(step_id="reauth_confirm", data_schema=schema, errors=errors)
 
     async def async_step_caldav(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         """Collect CalDAV credentials and test the connection before saving."""

@@ -70,6 +70,7 @@ class CalDavCalendarTarget:
     def __init__(
         self,
         hass: HomeAssistant,
+        entry_id: str,
         url: str,
         username: str,
         password: str,
@@ -88,21 +89,36 @@ class CalDavCalendarTarget:
         differs from the entry point, and this keeps calendar resolution on
         exactly one, verified code path instead of two.
 
+        `entry_id` lets a rejected-credentials failure start this account's
+        reauth flow (see `_start_reauth`) -- this target has no other
+        reference back to its own config entry.
+
         owner_email is used as the ATTENDEE of EMAIL alarms — RFC 5545
         requires one, and for an account like iCloud the CalDAV username
         already *is* the account's email address.
         """
         self._hass = hass
+        self._entry_id = entry_id
         self._url = url
         self._username = username
         self._password = password
         self._verify_ssl = verify_ssl
         self._owner_email = owner_email
 
+    def _start_reauth(self) -> None:
+        """Start this account's reauth flow after a rejected-credentials failure."""
+        entry = self._hass.config_entries.async_get_entry(self._entry_id)
+        if entry is not None:
+            entry.async_start_reauth(self._hass)
+
     async def async_create_event(self, calendar_ref: str, spec: EventSpec) -> str:
         """Build the ICS for spec and PUT it to the given calendar URL."""
         ical_text, uid = self._build_ical(spec)
-        await self._hass.async_add_executor_job(self._save_event, calendar_ref, ical_text)
+        try:
+            await self._hass.async_add_executor_job(self._save_event, calendar_ref, ical_text)
+        except CalDavAuthError:
+            self._start_reauth()
+            raise
         return uid
 
     def _find_calendar(self, client: caldav.DAVClient, calendar_ref: str) -> caldav.Calendar | None:
@@ -152,7 +168,9 @@ class CalDavCalendarTarget:
                 method,
                 dry_run,
             )
-        except (CalDavAuthError, CalDavConnectionError):
+        except (CalDavAuthError, CalDavConnectionError) as err:
+            if isinstance(err, CalDavAuthError):
+                self._start_reauth()
             _LOGGER.warning("Could not reach %s to check for a matching event", calendar_ref)
             return False
 
@@ -234,7 +252,9 @@ class CalDavCalendarTarget:
                 lookahead,
                 skip_backfill,
             )
-        except (CalDavAuthError, CalDavConnectionError):
+        except (CalDavAuthError, CalDavConnectionError) as err:
+            if isinstance(err, CalDavAuthError):
+                self._start_reauth()
             _LOGGER.warning("Could not reach %s to poll for new events", calendar_ref)
             return None
 
@@ -279,7 +299,9 @@ class CalDavCalendarTarget:
         """Delete the event identified by uid. Returns False if it can't be found."""
         try:
             return await self._hass.async_add_executor_job(self._delete_event, calendar_ref, uid)
-        except (CalDavAuthError, CalDavConnectionError):
+        except (CalDavAuthError, CalDavConnectionError) as err:
+            if isinstance(err, CalDavAuthError):
+                self._start_reauth()
             _LOGGER.warning("Could not reach %s to delete an event", calendar_ref)
             return False
 
@@ -305,7 +327,9 @@ class CalDavCalendarTarget:
             return await self._hass.async_add_executor_job(
                 self._update_event, calendar_ref, uid, updates
             )
-        except (CalDavAuthError, CalDavConnectionError):
+        except (CalDavAuthError, CalDavConnectionError) as err:
+            if isinstance(err, CalDavAuthError):
+                self._start_reauth()
             _LOGGER.warning("Could not reach %s to update an event", calendar_ref)
             return False
 

@@ -10,7 +10,7 @@ import caldav
 import icalendar
 import pytest
 
-from custom_components.calendar_bridge.caldav_target import CalDavCalendarTarget
+from custom_components.calendar_bridge.caldav_target import CalDavAuthError, CalDavCalendarTarget
 from custom_components.calendar_bridge.target import (
     CalendarNotFoundError,
     EventSpec,
@@ -21,7 +21,15 @@ from custom_components.calendar_bridge.target import (
 
 
 class _FakeHass:
-    """Duck-typed stand-in for HomeAssistant.async_add_executor_job."""
+    """Duck-typed stand-in for HomeAssistant.async_add_executor_job.
+
+    `config_entries` is a bare MagicMock -- only the reauth tests below
+    configure/assert on it (via `async_get_entry`); every other test ignores
+    it entirely, since `_start_reauth` is only reached on a `CalDavAuthError`.
+    """
+
+    def __init__(self) -> None:
+        self.config_entries = MagicMock()
 
     async def async_add_executor_job(self, func, *args):
         return func(*args)
@@ -31,7 +39,9 @@ _ACCOUNT_URL = "https://caldav.icloud.com"
 
 
 def _make_target(owner_email: str | None = None) -> CalDavCalendarTarget:
-    return CalDavCalendarTarget(_FakeHass(), _ACCOUNT_URL, "matthias", "hunter2", True, owner_email)
+    return CalDavCalendarTarget(
+        _FakeHass(), "entry_1", _ACCOUNT_URL, "matthias", "hunter2", True, owner_email
+    )
 
 
 def _mock_client_with_calendar(calendar_ref: str) -> tuple[MagicMock, MagicMock]:
@@ -793,3 +803,86 @@ async def test_update_event_empty_reminders_removes_all_alarms():
 
     assert updated is True
     assert list(mock_event.icalendar_component.walk("VALARM")) == []
+
+
+def _make_target_with_hass() -> tuple[CalDavCalendarTarget, _FakeHass]:
+    hass = _FakeHass()
+    target = CalDavCalendarTarget(hass, "entry_1", _ACCOUNT_URL, "matthias", "hunter2", True, None)
+    return target, hass
+
+
+@pytest.mark.asyncio
+async def test_poll_starts_reauth_on_auth_error():
+    target, hass = _make_target_with_hass()
+    mock_client = MagicMock()
+    mock_client.principal.side_effect = caldav.lib.error.AuthorizationError("bad credentials")
+    mock_entry = hass.config_entries.async_get_entry.return_value
+
+    with patch(
+        "custom_components.calendar_bridge.caldav_target.build_client", return_value=mock_client
+    ):
+        seen = await target.async_backfill_new_events(
+            "https://example.test/cal/", set(), 30, "popup", timedelta(days=365), False
+        )
+
+    assert seen is None
+    hass.config_entries.async_get_entry.assert_called_once_with("entry_1")
+    mock_entry.async_start_reauth.assert_called_once_with(hass)
+
+
+@pytest.mark.asyncio
+async def test_backfill_reminder_starts_reauth_on_auth_error():
+    target, hass = _make_target_with_hass()
+    mock_client = MagicMock()
+    mock_client.principal.side_effect = caldav.lib.error.AuthorizationError("bad credentials")
+    mock_entry = hass.config_entries.async_get_entry.return_value
+
+    with patch(
+        "custom_components.calendar_bridge.caldav_target.build_client", return_value=mock_client
+    ):
+        patched = await target.async_backfill_reminder(
+            "https://example.test/cal/",
+            "Native Termin",
+            datetime(2026, 10, 1, 9, 0, tzinfo=UTC),
+            30,
+            "popup",
+        )
+
+    assert patched is False
+    mock_entry.async_start_reauth.assert_called_once_with(hass)
+
+
+@pytest.mark.asyncio
+async def test_poll_does_not_start_reauth_on_a_plain_connection_error():
+    target, hass = _make_target_with_hass()
+    mock_client = MagicMock()
+    mock_client.principal.side_effect = caldav.lib.error.DAVError("unreachable")
+
+    with patch(
+        "custom_components.calendar_bridge.caldav_target.build_client", return_value=mock_client
+    ):
+        await target.async_backfill_new_events(
+            "https://example.test/cal/", set(), 30, "popup", timedelta(days=365), False
+        )
+
+    hass.config_entries.async_get_entry.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_create_event_starts_reauth_and_still_raises_on_auth_error():
+    target, hass = _make_target_with_hass()
+    mock_client = MagicMock()
+    mock_client.principal.side_effect = caldav.lib.error.AuthorizationError("bad credentials")
+    mock_entry = hass.config_entries.async_get_entry.return_value
+    spec = EventSpec(summary="Plain", start=datetime(2026, 10, 1, 9, 0, tzinfo=UTC))
+
+    with (
+        patch(
+            "custom_components.calendar_bridge.caldav_target.build_client",
+            return_value=mock_client,
+        ),
+        pytest.raises(CalDavAuthError),
+    ):
+        await target.async_create_event("https://example.test/cal/", spec)
+
+    mock_entry.async_start_reauth.assert_called_once_with(hass)
