@@ -36,6 +36,7 @@ from .const import (
     CONF_DISPLAY_NAME,
     CONF_GOOGLE_ENTRY_ID,
     CONF_NOTIFY_ENABLED,
+    CONF_NOTIFY_MESSAGE_TEMPLATE,
     CONF_NOTIFY_MINUTES_BEFORE,
     CONF_NOTIFY_TARGET,
     DEFAULT_NOTIFY_ENABLED,
@@ -116,6 +117,10 @@ def _reminder_defaults_schema(
                 mode=selector.NumberSelectorMode.BOX,
             )
         ),
+        vol.Optional(
+            CONF_NOTIFY_MESSAGE_TEMPLATE,
+            default=defaults.get(CONF_NOTIFY_MESSAGE_TEMPLATE, ""),
+        ): selector.TextSelector(),
     }
 
 
@@ -268,6 +273,7 @@ class CalendarBridgeConfigFlow(ConfigFlow, domain=DOMAIN):
                         CONF_NOTIFY_ENABLED: user_input[CONF_NOTIFY_ENABLED],
                         CONF_NOTIFY_TARGET: user_input[CONF_NOTIFY_TARGET],
                         CONF_NOTIFY_MINUTES_BEFORE: user_input[CONF_NOTIFY_MINUTES_BEFORE],
+                        CONF_NOTIFY_MESSAGE_TEMPLATE: user_input[CONF_NOTIFY_MESSAGE_TEMPLATE],
                     },
                 }
                 for index, calendar_url in enumerate(user_input[CONF_CALENDAR_URL])
@@ -355,6 +361,7 @@ class CalendarBridgeConfigFlow(ConfigFlow, domain=DOMAIN):
                         CONF_NOTIFY_ENABLED: user_input[CONF_NOTIFY_ENABLED],
                         CONF_NOTIFY_TARGET: user_input[CONF_NOTIFY_TARGET],
                         CONF_NOTIFY_MINUTES_BEFORE: user_input[CONF_NOTIFY_MINUTES_BEFORE],
+                        CONF_NOTIFY_MESSAGE_TEMPLATE: user_input[CONF_NOTIFY_MESSAGE_TEMPLATE],
                     },
                 }
                 for index, calendar_id in enumerate(user_input[CONF_CALENDAR_URL])
@@ -447,6 +454,7 @@ class CalendarSubentryFlow(ConfigSubentryFlow):
                     CONF_NOTIFY_ENABLED: user_input[CONF_NOTIFY_ENABLED],
                     CONF_NOTIFY_TARGET: user_input[CONF_NOTIFY_TARGET],
                     CONF_NOTIFY_MINUTES_BEFORE: user_input[CONF_NOTIFY_MINUTES_BEFORE],
+                    CONF_NOTIFY_MESSAGE_TEMPLATE: user_input[CONF_NOTIFY_MESSAGE_TEMPLATE],
                 },
                 unique_id=calendar_ref,
             )

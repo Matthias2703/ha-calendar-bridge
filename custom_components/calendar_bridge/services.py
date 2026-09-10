@@ -44,7 +44,7 @@ from .const import (
 )
 from .device import async_find_default_device, async_resolve_device
 from .reminder_scheduler import ReminderScheduler
-from .target import CalendarNotFoundError, EventSpec, ReminderSpec
+from .target import CalendarNotFoundError, EventSpec, ReminderSpec, render_notify_message
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -197,7 +197,7 @@ async def _async_schedule_notification(
     # offset -- async_track_point_in_time needs a tz-aware one to compare
     # against dt_util.utcnow() correctly.
     fire_at = dt_util.as_utc(start) - timedelta(minutes=notify_data[ATTR_MINUTES_BEFORE])
-    message = notify_data.get(ATTR_NOTIFY_MESSAGE) or f"Reminder: {spec.summary}"
+    message = render_notify_message(notify_data.get(ATTR_NOTIFY_MESSAGE), spec.summary, spec.start)
 
     scheduler: ReminderScheduler = hass.data[DOMAIN]["reminder_scheduler"]
     await scheduler.async_schedule(notify_data[ATTR_NOTIFY_TARGET], fire_at, message)

@@ -33,6 +33,7 @@ from .const import (
     CONF_DISPLAY_NAME,
     CONF_GOOGLE_ENTRY_ID,
     CONF_NOTIFY_ENABLED,
+    CONF_NOTIFY_MESSAGE_TEMPLATE,
     CONF_NOTIFY_MINUTES_BEFORE,
     CONF_NOTIFY_TARGET,
     DEFAULT_NOTIFY_ENABLED,
@@ -46,7 +47,7 @@ from .google_target import GoogleCalendarTarget
 from .reminder_scheduler import ReminderScheduler
 from .seen_events import SeenEventsTracker
 from .services import CREATE_EVENT_SCHEMA, async_handle_create_event
-from .target import SeenEvent
+from .target import SeenEvent, render_notify_message
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -84,8 +85,8 @@ __all__ = ["DOMAIN"]
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 
 
-def _notify_settings(subentry: Any) -> tuple[str, int] | None:
-    """Return (target, minutes_before) if this calendar's HA notification is enabled.
+def _notify_settings(subentry: Any) -> tuple[str, int, str | None] | None:
+    """Return (target, minutes_before, message_template) if the HA notification is enabled.
 
     Independent of the native (VALARM/Google) reminder settings -- a user can
     have either, both, or neither. `.get(...)` with a fallback throughout,
@@ -97,7 +98,11 @@ def _notify_settings(subentry: Any) -> tuple[str, int] | None:
     target = subentry.data.get(CONF_NOTIFY_TARGET) or ""
     if not target:
         return None
-    return target, subentry.data.get(CONF_NOTIFY_MINUTES_BEFORE, DEFAULT_NOTIFY_MINUTES_BEFORE)
+    return (
+        target,
+        subentry.data.get(CONF_NOTIFY_MINUTES_BEFORE, DEFAULT_NOTIFY_MINUTES_BEFORE),
+        subentry.data.get(CONF_NOTIFY_MESSAGE_TEMPLATE) or None,
+    )
 
 
 async def _async_schedule_ha_notification(
@@ -106,14 +111,16 @@ async def _async_schedule_ha_notification(
     minutes_before: int,
     summary: str,
     start: datetime | date,
+    message_template: str | None = None,
 ) -> None:
     """Schedule an HA-native notification for a newly-detected calendar event."""
     start_dt = (
         start if isinstance(start, datetime) else datetime.combine(start, datetime.min.time())
     )
     fire_at = dt_util.as_utc(start_dt) - timedelta(minutes=minutes_before)
+    message = render_notify_message(message_template, summary, start)
     try:
-        await scheduler.async_schedule(target, fire_at, f"Reminder: {summary}")
+        await scheduler.async_schedule(target, fire_at, message)
     except Exception:  # noqa: BLE001 -- one failed schedule must not break the poll
         _LOGGER.warning("Failed to schedule an HA notification for '%s'", summary, exc_info=True)
 
@@ -272,7 +279,7 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
 
                 notify = _notify_settings(subentry)
                 if notify is not None and not is_first_poll:
-                    notify_target, notify_minutes_before = notify
+                    notify_target, notify_minutes_before, notify_message_template = notify
                     for seen in found:
                         if seen.uid in known_before:
                             continue
@@ -282,6 +289,7 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
                             notify_minutes_before,
                             seen.summary,
                             seen.start,
+                            notify_message_template,
                         )
 
     async_track_time_interval(hass, _async_poll_for_new_events, _POLL_INTERVAL)

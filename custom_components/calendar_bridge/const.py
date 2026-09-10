@@ -26,6 +26,9 @@ CONF_DEFAULT_TARGET = "default_target"
 CONF_NOTIFY_ENABLED = "notify_enabled"
 CONF_NOTIFY_TARGET = "notify_target"
 CONF_NOTIFY_MINUTES_BEFORE = "notify_minutes_before"
+# Supports {summary}/{start} placeholders -- see target.render_notify_message.
+# Empty/unset falls back to DEFAULT_NOTIFY_MESSAGE_TEMPLATE.
+CONF_NOTIFY_MESSAGE_TEMPLATE = "notify_message_template"
 
 REMINDER_METHOD_POPUP = "popup"
 REMINDER_METHOD_EMAIL = "email"

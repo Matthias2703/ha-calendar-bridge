@@ -40,7 +40,8 @@
           "default_target": "Als Standard-Ziel verwenden",
           "notify_enabled": "Home-Assistant-Benachrichtigung senden",
           "notify_target": "Benachrichtigungsziel",
-          "notify_minutes_before": "Benachrichtigungsvorlauf (Minuten)"
+          "notify_minutes_before": "Benachrichtigungsvorlauf (Minuten)",
+          "notify_message_template": "Benachrichtigungstext"
         },
         "data_description": {
           "calendar_url": "Jeder hier ausgewählte Kalender wird zu einem eigenen Gerät, das du beim create_event-Dienst als Ziel auswählen kannst.",
@@ -49,7 +50,8 @@
           "default_target": "Erlaubt es, beim create_event-Aufruf das Ziel-Gerät ganz wegzulassen -- dann wird dieser Kalender verwendet. Es sollte immer nur ein Kalender als Standard markiert sein.",
           "notify_enabled": "Plant eine eigenständige Home-Assistant-Benachrichtigung für jeden auf diesem Kalender erkannten Termin, unabhängig davon, wie er angelegt wurde -- zusätzlich zur oder anstelle der obigen Erinnerung.",
           "notify_target": "Eine Notify-Entität (z. B. dein Handy), an die die Benachrichtigung gesendet wird. Erforderlich, damit die Benachrichtigung tatsächlich ausgelöst wird.",
-          "notify_minutes_before": "Wie viele Minuten vor Terminbeginn die Home-Assistant-Benachrichtigung gesendet wird."
+          "notify_minutes_before": "Wie viele Minuten vor Terminbeginn die Home-Assistant-Benachrichtigung gesendet wird.",
+          "notify_message_template": "Unterstützt die Platzhalter {summary}/{start}. Leer lassen für den Standardtext 'Reminder: {summary}'."
         }
       },
       "google": {
@@ -72,7 +74,8 @@
           "default_target": "Als Standard-Ziel verwenden",
           "notify_enabled": "Home-Assistant-Benachrichtigung senden",
           "notify_target": "Benachrichtigungsziel",
-          "notify_minutes_before": "Benachrichtigungsvorlauf (Minuten)"
+          "notify_minutes_before": "Benachrichtigungsvorlauf (Minuten)",
+          "notify_message_template": "Benachrichtigungstext"
         },
         "data_description": {
           "calendar_url": "Jeder hier ausgewählte Kalender wird zu einem eigenen Gerät, das du beim create_event-Dienst als Ziel auswählen kannst.",
@@ -81,7 +84,8 @@
           "default_target": "Erlaubt es, beim create_event-Aufruf das Ziel-Gerät ganz wegzulassen -- dann wird dieser Kalender verwendet. Es sollte immer nur ein Kalender als Standard markiert sein.",
           "notify_enabled": "Plant eine eigenständige Home-Assistant-Benachrichtigung für jeden auf diesem Kalender erkannten Termin, unabhängig davon, wie er angelegt wurde -- zusätzlich zur oder anstelle der obigen Erinnerung.",
           "notify_target": "Eine Notify-Entität (z. B. dein Handy), an die die Benachrichtigung gesendet wird. Erforderlich, damit die Benachrichtigung tatsächlich ausgelöst wird.",
-          "notify_minutes_before": "Wie viele Minuten vor Terminbeginn die Home-Assistant-Benachrichtigung gesendet wird."
+          "notify_minutes_before": "Wie viele Minuten vor Terminbeginn die Home-Assistant-Benachrichtigung gesendet wird.",
+          "notify_message_template": "Unterstützt die Platzhalter {summary}/{start}. Leer lassen für den Standardtext 'Reminder: {summary}'."
         }
       }
     },
@@ -113,7 +117,8 @@
             "default_target": "Als Standard-Ziel verwenden",
             "notify_enabled": "Home-Assistant-Benachrichtigung senden",
             "notify_target": "Benachrichtigungsziel",
-            "notify_minutes_before": "Benachrichtigungsvorlauf (Minuten)"
+            "notify_minutes_before": "Benachrichtigungsvorlauf (Minuten)",
+            "notify_message_template": "Benachrichtigungstext"
           },
           "data_description": {
             "default_reminder_minutes": "Wird verwendet, wenn ein create_event-Aufruf keine eigene Erinnerung angibt. Wirkt nur, wenn die Methode unten nicht 'Keine' ist.",
@@ -121,7 +126,8 @@
             "default_target": "Erlaubt es, beim create_event-Aufruf das Ziel-Gerät ganz wegzulassen -- dann wird dieser Kalender verwendet. Es sollte immer nur ein Kalender als Standard markiert sein.",
             "notify_enabled": "Plant eine eigenständige Home-Assistant-Benachrichtigung für jeden auf diesem Kalender erkannten Termin, unabhängig davon, wie er angelegt wurde -- zusätzlich zur oder anstelle der obigen Erinnerung.",
             "notify_target": "Eine Notify-Entität (z. B. dein Handy), an die die Benachrichtigung gesendet wird. Erforderlich, damit die Benachrichtigung tatsächlich ausgelöst wird.",
-            "notify_minutes_before": "Wie viele Minuten vor Terminbeginn die Home-Assistant-Benachrichtigung gesendet wird."
+            "notify_minutes_before": "Wie viele Minuten vor Terminbeginn die Home-Assistant-Benachrichtigung gesendet wird.",
+            "notify_message_template": "Unterstützt die Platzhalter {summary}/{start}. Leer lassen für den Standardtext 'Reminder: {summary}'."
           }
         },
         "reconfigure": {
@@ -132,7 +138,8 @@
             "default_target": "Als Standard-Ziel verwenden",
             "notify_enabled": "Home-Assistant-Benachrichtigung senden",
             "notify_target": "Benachrichtigungsziel",
-            "notify_minutes_before": "Benachrichtigungsvorlauf (Minuten)"
+            "notify_minutes_before": "Benachrichtigungsvorlauf (Minuten)",
+            "notify_message_template": "Benachrichtigungstext"
           },
           "data_description": {
             "default_reminder_minutes": "Wird verwendet, wenn ein create_event-Aufruf keine eigene Erinnerung angibt. Wirkt nur, wenn die Methode unten nicht 'Keine' ist.",
@@ -140,7 +147,8 @@
             "default_target": "Erlaubt es, beim create_event-Aufruf das Ziel-Gerät ganz wegzulassen -- dann wird dieser Kalender verwendet. Es sollte immer nur ein Kalender als Standard markiert sein.",
             "notify_enabled": "Plant eine eigenständige Home-Assistant-Benachrichtigung für jeden auf diesem Kalender erkannten Termin, unabhängig davon, wie er angelegt wurde -- zusätzlich zur oder anstelle der obigen Erinnerung.",
             "notify_target": "Eine Notify-Entität (z. B. dein Handy), an die die Benachrichtigung gesendet wird. Erforderlich, damit die Benachrichtigung tatsächlich ausgelöst wird.",
-            "notify_minutes_before": "Wie viele Minuten vor Terminbeginn die Home-Assistant-Benachrichtigung gesendet wird."
+            "notify_minutes_before": "Wie viele Minuten vor Terminbeginn die Home-Assistant-Benachrichtigung gesendet wird.",
+            "notify_message_template": "Unterstützt die Platzhalter {summary}/{start}. Leer lassen für den Standardtext 'Reminder: {summary}'."
           }
         }
       },
@@ -244,7 +252,7 @@
         },
         "notify": {
           "name": "Benachrichtigungs-Erinnerung",
-          "description": "Zusätzlich eine Home-Assistant-Benachrichtigung vor dem Termin senden, unabhängig von der Kalender-eigenen Erinnerung. Braucht ein Notify-Ziel und minutes_before; message ist optional."
+          "description": "Zusätzlich eine Home-Assistant-Benachrichtigung vor dem Termin senden, unabhängig von der Kalender-eigenen Erinnerung. Braucht ein Notify-Ziel und minutes_before; message ist optional und unterstützt die Platzhalter {summary}/{start} (Standard: 'Reminder: {summary}')."
         }
       }
     }

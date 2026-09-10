@@ -40,7 +40,8 @@
           "default_target": "Use as default target",
           "notify_enabled": "Send a Home Assistant notification",
           "notify_target": "Notification target",
-          "notify_minutes_before": "Notification lead time (minutes)"
+          "notify_minutes_before": "Notification lead time (minutes)",
+          "notify_message_template": "Notification message"
         },
         "data_description": {
           "calendar_url": "Every calendar you select here becomes a separate device you can target with the create_event service.",
@@ -49,7 +50,8 @@
           "default_target": "Lets a create_event call omit the target device entirely -- it will use this calendar instead. Only one calendar should be marked as default.",
           "notify_enabled": "Schedules an independent Home Assistant notification for every event detected on this calendar, however it was created -- on top of, or instead of, the reminder above.",
           "notify_target": "A notify entity (e.g. your phone) to send the notification to. Required for the notification to actually fire.",
-          "notify_minutes_before": "How many minutes before the event start the Home Assistant notification is sent."
+          "notify_minutes_before": "How many minutes before the event start the Home Assistant notification is sent.",
+          "notify_message_template": "Supports {summary}/{start} placeholders. Leave blank for the default 'Reminder: {summary}'."
         }
       },
       "google": {
@@ -72,7 +74,8 @@
           "default_target": "Use as default target",
           "notify_enabled": "Send a Home Assistant notification",
           "notify_target": "Notification target",
-          "notify_minutes_before": "Notification lead time (minutes)"
+          "notify_minutes_before": "Notification lead time (minutes)",
+          "notify_message_template": "Notification message"
         },
         "data_description": {
           "calendar_url": "Every calendar you select here becomes a separate device you can target with the create_event service.",
@@ -81,7 +84,8 @@
           "default_target": "Lets a create_event call omit the target device entirely -- it will use this calendar instead. Only one calendar should be marked as default.",
           "notify_enabled": "Schedules an independent Home Assistant notification for every event detected on this calendar, however it was created -- on top of, or instead of, the reminder above.",
           "notify_target": "A notify entity (e.g. your phone) to send the notification to. Required for the notification to actually fire.",
-          "notify_minutes_before": "How many minutes before the event start the Home Assistant notification is sent."
+          "notify_minutes_before": "How many minutes before the event start the Home Assistant notification is sent.",
+          "notify_message_template": "Supports {summary}/{start} placeholders. Leave blank for the default 'Reminder: {summary}'."
         }
       }
     },
@@ -113,7 +117,8 @@
             "default_target": "Use as default target",
             "notify_enabled": "Send a Home Assistant notification",
             "notify_target": "Notification target",
-            "notify_minutes_before": "Notification lead time (minutes)"
+            "notify_minutes_before": "Notification lead time (minutes)",
+            "notify_message_template": "Notification message"
           },
           "data_description": {
             "default_reminder_minutes": "Used when a create_event call doesn't specify its own reminder. Only takes effect if the method below isn't 'None'.",
@@ -121,7 +126,8 @@
             "default_target": "Lets a create_event call omit the target device entirely -- it will use this calendar instead. Only one calendar should be marked as default.",
             "notify_enabled": "Schedules an independent Home Assistant notification for every event detected on this calendar, however it was created -- on top of, or instead of, the reminder above.",
             "notify_target": "A notify entity (e.g. your phone) to send the notification to. Required for the notification to actually fire.",
-            "notify_minutes_before": "How many minutes before the event start the Home Assistant notification is sent."
+            "notify_minutes_before": "How many minutes before the event start the Home Assistant notification is sent.",
+            "notify_message_template": "Supports {summary}/{start} placeholders. Leave blank for the default 'Reminder: {summary}'."
           }
         },
         "reconfigure": {
@@ -132,7 +138,8 @@
             "default_target": "Use as default target",
             "notify_enabled": "Send a Home Assistant notification",
             "notify_target": "Notification target",
-            "notify_minutes_before": "Notification lead time (minutes)"
+            "notify_minutes_before": "Notification lead time (minutes)",
+            "notify_message_template": "Notification message"
           },
           "data_description": {
             "default_reminder_minutes": "Used when a create_event call doesn't specify its own reminder. Only takes effect if the method below isn't 'None'.",
@@ -140,7 +147,8 @@
             "default_target": "Lets a create_event call omit the target device entirely -- it will use this calendar instead. Only one calendar should be marked as default.",
             "notify_enabled": "Schedules an independent Home Assistant notification for every event detected on this calendar, however it was created -- on top of, or instead of, the reminder above.",
             "notify_target": "A notify entity (e.g. your phone) to send the notification to. Required for the notification to actually fire.",
-            "notify_minutes_before": "How many minutes before the event start the Home Assistant notification is sent."
+            "notify_minutes_before": "How many minutes before the event start the Home Assistant notification is sent.",
+            "notify_message_template": "Supports {summary}/{start} placeholders. Leave blank for the default 'Reminder: {summary}'."
           }
         }
       },
@@ -244,7 +252,7 @@
         },
         "notify": {
           "name": "Notification reminder",
-          "description": "Also send a Home Assistant notification before the event, independent of the calendar's own reminder. Needs a notify target and minutes_before; message is optional."
+          "description": "Also send a Home Assistant notification before the event, independent of the calendar's own reminder. Needs a notify target and minutes_before; message is optional and supports {summary}/{start} placeholders (default: 'Reminder: {summary}')."
         }
       }
     }

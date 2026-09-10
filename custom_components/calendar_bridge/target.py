@@ -98,6 +98,25 @@ def effective_reminder_minutes(all_day: bool, minutes_before: int, time_of_day: 
     return days_before * 1440 - anchor_minutes
 
 
+DEFAULT_NOTIFY_MESSAGE_TEMPLATE = "Reminder: {summary}"
+
+
+def render_notify_message(template: str | None, summary: str, start: datetime | date) -> str:
+    """Render an HA-notification message, supporting {summary}/{start} placeholders.
+
+    Used by both the per-event `notify.message` field and a calendar's own
+    message template, so a typo (an unknown placeholder or bad format spec)
+    can't crash the notification -- it falls back to the plain default
+    instead. `start` supports its own format specs too, e.g. "{start:%H:%M}",
+    since `str.format` calls `datetime.__format__`/`date.__format__`.
+    """
+    text = template or DEFAULT_NOTIFY_MESSAGE_TEMPLATE
+    try:
+        return text.format(summary=summary, start=start)
+    except (KeyError, IndexError, ValueError):
+        return DEFAULT_NOTIFY_MESSAGE_TEMPLATE.format(summary=summary, start=start)
+
+
 def all_day_bounds(start: datetime | date, end: datetime | date | None) -> tuple[date, date]:
     """Compute the (DTSTART, DTEND) dates for an all-day event.
 
