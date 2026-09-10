@@ -309,9 +309,7 @@ class CalDavCalendarTarget:
             effective_minutes = effective_reminder_minutes(
                 spec.all_day, reminder.minutes_before, reminder.time_of_day
             )
-            event.add_component(
-                self._build_alarm(spec.summary, reminder.method, effective_minutes)
-            )
+            event.add_component(self._build_alarm(spec.summary, reminder.method, effective_minutes))
 
         cal.add_component(event)
         return cal.to_ical().decode("utf-8"), uid

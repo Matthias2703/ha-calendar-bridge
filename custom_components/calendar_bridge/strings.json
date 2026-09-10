@@ -175,6 +175,11 @@
       "notify_minutes": {
         "name": "HA notification lead time"
       }
+    },
+    "button": {
+      "test_notify": {
+        "name": "Send test notification"
+      }
     }
   },
   "exceptions": {

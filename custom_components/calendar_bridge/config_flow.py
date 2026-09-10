@@ -487,9 +487,7 @@ class CalendarSubentryFlow(ConfigSubentryFlow):
         if user_input is not None:
             entry = self._get_entry()
             if user_input[CONF_DEFAULT_TARGET]:
-                subentry_id = next(
-                    sid for sid, sub in entry.subentries.items() if sub is subentry
-                )
+                subentry_id = next(sid for sid, sub in entry.subentries.items() if sub is subentry)
                 async_clear_other_defaults(self.hass, entry, subentry_id)
             return self.async_update_and_abort(
                 entry,

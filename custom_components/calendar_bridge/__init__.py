@@ -75,7 +75,7 @@ _BACKFILL_RETRY_DELAYS = (3, 5, 10, 15, 15)
 _POLL_INTERVAL = timedelta(seconds=60)
 _POLL_LOOKAHEAD = timedelta(days=365)
 
-PLATFORMS: list[Platform] = [Platform.SWITCH, Platform.NUMBER]
+PLATFORMS: list[Platform] = [Platform.SWITCH, Platform.NUMBER, Platform.BUTTON]
 
 type CalendarBridgeConfigEntry = ConfigEntry[CalDavCalendarTarget | GoogleCalendarTarget]
 

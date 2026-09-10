@@ -175,6 +175,11 @@
       "notify_minutes": {
         "name": "HA-Benachrichtigungsvorlauf"
       }
+    },
+    "button": {
+      "test_notify": {
+        "name": "Testbenachrichtigung senden"
+      }
     }
   },
   "exceptions": {

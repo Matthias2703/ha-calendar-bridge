@@ -21,6 +21,7 @@ Calendar Bridge talks directly to the Google Calendar REST API and to CalDAV (vi
 - Multiple target calendars per account via Config Subentries, each exposed as its own device for a clean device picker in the service UI
 - Optional **per-event Home Assistant notification**: `create_event`'s `notify` field sends a notification (e.g. to your phone) at a configurable time before that one event — independent of, or in addition to, the native Google/iOS reminder
 - Optional **per-calendar Home Assistant notification**: turn it on once for a calendar (its own switch + lead-time entity, no YAML) and every event detected there — created via `create_event`, the native "+" button, an automation, or directly in the Google/iOS app — gets an HA notification automatically
+- A **"Send test notification" button** per calendar to verify the notify target/setup immediately, without waiting for a real event
 - Per-calendar defaults: default reminder minutes, default reminder method, and a default target calendar so `create_event` calls can omit those fields entirely
 
 ## Installation
