@@ -51,3 +51,11 @@ def test_unmatched_positional_placeholder_falls_back_to_the_default() -> None:
     # crash the notification.
     message = render_notify_message("{0}", "Dentist", datetime(2026, 10, 1, 9, 0, tzinfo=UTC))
     assert message == "Reminder: Dentist"
+
+
+def test_bad_attribute_access_falls_back_to_the_default() -> None:
+    # date has no `.hour` -- a plausible typo when a template tries to format
+    # a time component. KeyError/IndexError/ValueError aren't the only ways
+    # str.format() can fail; this must degrade the same way they do.
+    message = render_notify_message("{summary} at {start.hour}", "Birthday", date(2026, 10, 1))
+    assert message == "Reminder: Birthday"

@@ -361,10 +361,10 @@ class GoogleCalendarTarget:
             return None
         return seen
 
-    async def _async_find_event_id(
+    async def _async_find_event(
         self, calendar_ref: str, auth: AbstractAuth, uid: str
-    ) -> str | None:
-        """Resolve the iCalUID handed back by async_create_event to a Google event id.
+    ) -> dict[str, Any] | None:
+        """Resolve the iCalUID handed back by async_create_event to its full Google event JSON.
 
         gcal_sync's typed `ListEventsRequest` has no iCalUID field, and the
         only gcal_sync method that looks up by iCalUID belongs to a separate,
@@ -373,25 +373,25 @@ class GoogleCalendarTarget:
         cache, not the server). The underlying Calendar API's events.list
         endpoint supports filtering by `iCalUID` directly, though -- a raw
         request bypassing the typed wrapper, same as `async_create_event`'s
-        `post_json` call already does.
+        `post_json` call already does. Returns the full item (not just its
+        `id`) so callers that need the event's current state can reuse this
+        response instead of a second `events.get` round trip.
         """
         response = await auth.get_json(
             CALENDAR_EVENTS_URL.format(calendar_id=quote(calendar_ref, safe="")),
             params={"iCalUID": uid},
         )
         items = response.get("items") or []
-        if not items:
-            return None
-        return cast(str, items[0]["id"])
+        return cast(dict[str, Any], items[0]) if items else None
 
-    async def _async_find_instance_id(
+    async def _async_find_instance(
         self,
         calendar_ref: str,
         auth: AbstractAuth,
         master_event_id: str,
         occurrence: datetime | date,
-    ) -> str | None:
-        """Resolve one occurrence of a recurring event to its own instance event id.
+    ) -> dict[str, Any] | None:
+        """Resolve one occurrence of a recurring event to its own instance's full event JSON.
 
         Each instance of a Google recurring event has its own unique id,
         distinct from the master's -- `events.instances` (not wrapped by
@@ -400,7 +400,14 @@ class GoogleCalendarTarget:
         `occurrence`.
         """
         occurrence_dt = _as_utc_datetime(occurrence)
-        window = timedelta(hours=1)
+        # `timeMin`/`timeMax` bound each instance's *current* (possibly
+        # already-rescheduled) time, not its original slot -- but `occurrence`
+        # is deliberately the instance's *original* start (see this class's
+        # `async_update_event`/`async_delete_event` docstrings), so a caller
+        # can keep identifying an occurrence the same way even after moving
+        # it. A wide window keeps that working for any realistic reschedule;
+        # the actual match below is still exact, via `originalStartTime`.
+        window = timedelta(days=365)
         response = await auth.get_json(
             INSTANCES_URL.format(
                 calendar_id=quote(calendar_ref, safe=""), event_id=quote(master_event_id, safe="")
@@ -426,21 +433,22 @@ class GoogleCalendarTarget:
                 )
                 matches = parsed == occurrence_date
             if matches:
-                return cast(str, item["id"])
+                return cast(dict[str, Any], item)
         return None
 
-    async def _async_resolve_event_id(
+    async def _async_resolve_event(
         self,
         calendar_ref: str,
         auth: AbstractAuth,
         uid: str,
         occurrence: datetime | date | None,
-    ) -> str | None:
-        """Resolve uid (and optionally one occurrence of it) to a concrete event id."""
-        event_id = await self._async_find_event_id(calendar_ref, auth, uid)
-        if event_id is None or occurrence is None:
-            return event_id
-        return await self._async_find_instance_id(calendar_ref, auth, event_id, occurrence)
+    ) -> dict[str, Any] | None:
+        """Resolve uid (and optionally one occurrence of it) to its full event JSON."""
+        item = await self._async_find_event(calendar_ref, auth, uid)
+        if item is None or occurrence is None:
+            return item
+        master_event_id = cast(str, item["id"])
+        return await self._async_find_instance(calendar_ref, auth, master_event_id, occurrence)
 
     async def async_delete_event(
         self, calendar_ref: str, uid: str, occurrence: datetime | date | None = None
@@ -448,10 +456,10 @@ class GoogleCalendarTarget:
         """Delete the event (or one occurrence of it) identified by uid."""
         service, auth = await self._async_service()
         try:
-            event_id = await self._async_resolve_event_id(calendar_ref, auth, uid, occurrence)
-            if event_id is None:
+            item = await self._async_resolve_event(calendar_ref, auth, uid, occurrence)
+            if item is None:
                 return False
-            await service.async_delete_event(calendar_ref, event_id)
+            await service.async_delete_event(calendar_ref, cast(str, item["id"]))
         except ApiException:
             _LOGGER.warning("Could not delete event %s on %s", uid, calendar_ref, exc_info=True)
             return False
@@ -467,8 +475,8 @@ class GoogleCalendarTarget:
         """Apply `updates` to the event (or one occurrence of it) identified by uid."""
         service, auth = await self._async_service()
         try:
-            event_id = await self._async_resolve_event_id(calendar_ref, auth, uid, occurrence)
-            if event_id is None:
+            item = await self._async_resolve_event(calendar_ref, auth, uid, occurrence)
+            if item is None:
                 return False
             needs_current = (
                 updates.start is not None
@@ -476,11 +484,15 @@ class GoogleCalendarTarget:
                 or updates.all_day is not None
                 or updates.reminders is not None
             )
+            # Reuse the item already fetched while resolving the event/
+            # instance id above -- it already carries the same fields an
+            # extra `events.get` call would return, so no second round trip
+            # is needed here.
             current = (
-                await service.async_get_event(calendar_ref, event_id) if needs_current else None
+                GoogleEvent(**item, private_calendar_id=calendar_ref) if needs_current else None
             )
             body = _update_body(updates, current)
-            await service.async_patch_event(calendar_ref, event_id, body)
+            await service.async_patch_event(calendar_ref, cast(str, item["id"]), body)
         except ApiException:
             _LOGGER.warning("Could not update event %s on %s", uid, calendar_ref, exc_info=True)
             return False

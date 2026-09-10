@@ -8,6 +8,11 @@
   "integration_type": "service",
   "iot_class": "cloud_polling",
   "issue_tracker": "https://github.com/Matthias2703/ha-calendar-bridge/issues",
-  "requirements": ["icalendar==6.3.1", "caldav==2.1.0", "gcal-sync==9.1.1"],
-  "version": "0.1.0"
+  "requirements": [
+    "icalendar==6.3.1",
+    "caldav==2.1.0",
+    "recurring-ical-events==3.8.2",
+    "gcal-sync==9.1.1"
+  ],
+  "version": "0.2.0"
 }

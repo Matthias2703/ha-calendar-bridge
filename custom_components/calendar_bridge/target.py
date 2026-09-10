@@ -133,7 +133,7 @@ def render_notify_message(template: str | None, summary: str, start: datetime | 
     text = template or DEFAULT_NOTIFY_MESSAGE_TEMPLATE
     try:
         return text.format(summary=summary, start=start)
-    except (KeyError, IndexError, ValueError):
+    except Exception:  # noqa: BLE001 -- a template typo must never crash the caller
         return DEFAULT_NOTIFY_MESSAGE_TEMPLATE.format(summary=summary, start=start)
 
 

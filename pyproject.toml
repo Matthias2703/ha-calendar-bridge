@@ -1,6 +1,6 @@
 [project]
 name = "calendar-bridge"
-version = "0.1.0"
+version = "0.2.0"
 description = "Home Assistant custom integration: create calendar events with real reminders (VALARM/RRULE) via Google Calendar and CalDAV, plus optional HA-native notification reminders."
 readme = "README.md"
 license = { file = "LICENSE" }
@@ -20,6 +20,10 @@ warn_unused_ignores = true
 
 [[tool.mypy.overrides]]
 module = "caldav.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "recurring_ical_events.*"
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

@@ -9,11 +9,13 @@ from __future__ import annotations
 
 import logging
 import uuid
+from collections.abc import Callable
 from datetime import UTC, date, datetime, timedelta
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, TypeVar
 
 import caldav
 import icalendar
+import recurring_ical_events
 from homeassistant.util import dt as dt_util
 
 from .target import (
@@ -32,6 +34,8 @@ if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
 
 _LOGGER = logging.getLogger(__name__)
+
+_T = TypeVar("_T")
 
 _ALARM_ACTION: dict[ReminderMethod, str] = {"popup": "DISPLAY", "email": "EMAIL"}
 
@@ -111,14 +115,25 @@ class CalDavCalendarTarget:
         if entry is not None:
             entry.async_start_reauth(self._hass)
 
-    async def async_create_event(self, calendar_ref: str, spec: EventSpec) -> str:
-        """Build the ICS for spec and PUT it to the given calendar URL."""
-        ical_text, uid = self._build_ical(spec)
+    async def _async_run(self, func: Callable[..., _T], *args: Any) -> _T:
+        """Run a blocking CalDAV call, starting reauth on rejected credentials.
+
+        Every public method funnels its blocking work through this so the
+        reauth-on-auth-failure policy lives in exactly one place instead of
+        being copy-pasted (and drifting) across five independent methods --
+        `CalDavAuthError` and `CalDavConnectionError` are always re-raised
+        here; each caller still decides its own fallback for them.
+        """
         try:
-            await self._hass.async_add_executor_job(self._save_event, calendar_ref, ical_text)
+            return await self._hass.async_add_executor_job(func, *args)
         except CalDavAuthError:
             self._start_reauth()
             raise
+
+    async def async_create_event(self, calendar_ref: str, spec: EventSpec) -> str:
+        """Build the ICS for spec and PUT it to the given calendar URL."""
+        ical_text, uid = self._build_ical(spec)
+        await self._async_run(self._save_event, calendar_ref, ical_text)
         return uid
 
     def _find_calendar(self, client: caldav.DAVClient, calendar_ref: str) -> caldav.Calendar | None:
@@ -159,7 +174,7 @@ class CalDavCalendarTarget:
         to this calendar without going through `calendar_bridge.create_event`.
         """
         try:
-            return await self._hass.async_add_executor_job(
+            return await self._async_run(
                 self._backfill_reminder,
                 calendar_ref,
                 summary,
@@ -168,9 +183,7 @@ class CalDavCalendarTarget:
                 method,
                 dry_run,
             )
-        except (CalDavAuthError, CalDavConnectionError) as err:
-            if isinstance(err, CalDavAuthError):
-                self._start_reauth()
+        except (CalDavAuthError, CalDavConnectionError):
             _LOGGER.warning("Could not reach %s to check for a matching event", calendar_ref)
             return False
 
@@ -201,14 +214,35 @@ class CalDavCalendarTarget:
             component = event.icalendar_component
             if str(component.get("summary", "")) != summary:
                 continue
-            if list(component.walk("VALARM")):
+            uid = str(component.get("uid", ""))
+            if not uid:
+                continue
+            # `date_search` expands a recurring event client-side into a
+            # flattened, RRULE-less copy -- mutating and saving *that* object
+            # would permanently destroy the series on the server. Re-fetch
+            # the real, unexpanded event before writing anything.
+            try:
+                real_event = calendar.event_by_uid(uid)
+            except caldav.lib.error.NotFoundError:
+                continue
+            instance_calendar = real_event.icalendar_instance
+            master = (
+                self._find_master_component(instance_calendar) or real_event.icalendar_component
+            )
+            if list(master.walk("VALARM")):
                 continue  # already has a reminder
             if dry_run:
                 return True
-            event_all_day = not isinstance(start, datetime)
+            event_all_day = not isinstance(master["dtstart"].dt, datetime)
             effective_minutes = effective_reminder_minutes(event_all_day, minutes_before, None)
-            component.add_component(self._build_alarm(summary, method, effective_minutes))
-            event.save()
+            master.add_component(self._build_alarm(summary, method, effective_minutes))
+            try:
+                real_event.save()
+            except caldav.lib.error.PutError:
+                _LOGGER.warning(
+                    "Failed to save a backfilled reminder onto '%s'", summary, exc_info=True
+                )
+                return False
             _LOGGER.info("Backfilled a %s reminder onto '%s'", method, summary)
             return True
         _LOGGER.debug("No matching reminder-less event found for '%s' to backfill", summary)
@@ -243,7 +277,7 @@ class CalDavCalendarTarget:
         events."
         """
         try:
-            return await self._hass.async_add_executor_job(
+            return await self._async_run(
                 self._backfill_new_events,
                 calendar_ref,
                 known_uids,
@@ -252,9 +286,7 @@ class CalDavCalendarTarget:
                 lookahead,
                 skip_backfill,
             )
-        except (CalDavAuthError, CalDavConnectionError) as err:
-            if isinstance(err, CalDavAuthError):
-                self._start_reauth()
+        except (CalDavAuthError, CalDavConnectionError):
             _LOGGER.warning("Could not reach %s to poll for new events", calendar_ref)
             return None
 
@@ -286,12 +318,29 @@ class CalDavCalendarTarget:
             seen.add(SeenEvent(uid=uid, summary=summary, start=start))
             if uid in known_uids or skip_backfill:
                 continue
-            if list(component.walk("VALARM")):
+            # Re-fetch the real, unexpanded event before mutating/saving --
+            # see `_backfill_reminder` for why `date_search`'s own (expanded)
+            # result object must never be saved back.
+            try:
+                real_event = calendar.event_by_uid(uid)
+            except caldav.lib.error.NotFoundError:
+                continue
+            instance_calendar = real_event.icalendar_instance
+            master = (
+                self._find_master_component(instance_calendar) or real_event.icalendar_component
+            )
+            if list(master.walk("VALARM")):
                 continue  # already has a reminder
-            event_all_day = not isinstance(start, datetime)
+            event_all_day = not isinstance(master["dtstart"].dt, datetime)
             effective_minutes = effective_reminder_minutes(event_all_day, minutes_before, None)
-            component.add_component(self._build_alarm(summary, method, effective_minutes))
-            event.save()
+            master.add_component(self._build_alarm(summary, method, effective_minutes))
+            try:
+                real_event.save()
+            except caldav.lib.error.PutError:
+                _LOGGER.warning(
+                    "Failed to save a backfilled reminder onto '%s' (poll)", summary, exc_info=True
+                )
+                continue
             _LOGGER.info("Backfilled a %s reminder onto '%s' (poll)", method, summary)
         return seen
 
@@ -300,12 +349,8 @@ class CalDavCalendarTarget:
     ) -> bool:
         """Delete the event (or one occurrence of it) identified by uid."""
         try:
-            return await self._hass.async_add_executor_job(
-                self._delete_event, calendar_ref, uid, occurrence
-            )
-        except (CalDavAuthError, CalDavConnectionError) as err:
-            if isinstance(err, CalDavAuthError):
-                self._start_reauth()
+            return await self._async_run(self._delete_event, calendar_ref, uid, occurrence)
+        except (CalDavAuthError, CalDavConnectionError):
             _LOGGER.warning("Could not reach %s to delete an event", calendar_ref)
             return False
 
@@ -333,8 +378,11 @@ class CalDavCalendarTarget:
         master = self._find_master_component(instance_calendar)
         if master is None:
             return False
-        recurrence_id = self._recurrence_id_value(master, occurrence)
-        master.add("exdate", recurrence_id)
+        resolved = self._resolve_occurrence(instance_calendar, occurrence)
+        if resolved is None:
+            return False
+        occurrence_start, _occurrence_end = resolved
+        master.add("exdate", occurrence_start)
         # An occurrence being deleted might already have its own exception
         # (RECURRENCE-ID) VEVENT from a prior update_event -- drop that too,
         # since EXDATE alone only suppresses the RRULE-generated instance.
@@ -344,10 +392,19 @@ class CalDavCalendarTarget:
             if not (
                 isinstance(c, icalendar.Event)
                 and "RECURRENCE-ID" in c
-                and c["RECURRENCE-ID"].dt == recurrence_id
+                and c["RECURRENCE-ID"].dt == occurrence_start
             )
         ]
-        event.save()
+        try:
+            event.save()
+        except caldav.lib.error.PutError:
+            _LOGGER.warning(
+                "Failed to save %s after deleting an occurrence on %s",
+                uid,
+                calendar_ref,
+                exc_info=True,
+            )
+            return False
         return True
 
     async def async_update_event(
@@ -359,12 +416,8 @@ class CalDavCalendarTarget:
     ) -> bool:
         """Apply `updates` to the event (or one occurrence of it) identified by uid."""
         try:
-            return await self._hass.async_add_executor_job(
-                self._update_event, calendar_ref, uid, updates, occurrence
-            )
-        except (CalDavAuthError, CalDavConnectionError) as err:
-            if isinstance(err, CalDavAuthError):
-                self._start_reauth()
+            return await self._async_run(self._update_event, calendar_ref, uid, updates, occurrence)
+        except (CalDavAuthError, CalDavConnectionError):
             _LOGGER.warning("Could not reach %s to update an event", calendar_ref)
             return False
 
@@ -391,10 +444,17 @@ class CalDavCalendarTarget:
             master = self._find_master_component(instance_calendar)
             if master is None:
                 return False
-            component = self._find_or_create_exception(instance_calendar, master, occurrence)
+            resolved = self._resolve_occurrence(instance_calendar, occurrence)
+            if resolved is None:
+                return False
+            component = self._find_or_create_exception(instance_calendar, master, *resolved)
 
         self._apply_updates_to_component(component, updates)
-        event.save()
+        try:
+            event.save()
+        except caldav.lib.error.PutError:
+            _LOGGER.warning("Failed to save %s on %s", uid, calendar_ref, exc_info=True)
+            return False
         return True
 
     def _find_master_component(
@@ -406,47 +466,70 @@ class CalDavCalendarTarget:
                 return component
         return None
 
-    def _recurrence_id_value(
-        self, master: icalendar.Event, occurrence: datetime | date
-    ) -> datetime | date:
-        """Normalize `occurrence` to match the master's DTSTART value type.
+    def _resolve_occurrence(
+        self, instance_calendar: icalendar.Calendar, occurrence: datetime | date
+    ) -> tuple[datetime | date, datetime | date] | None:
+        """Confirm `occurrence` is a real, RRULE-generated instance of this series.
 
-        A RECURRENCE-ID/EXDATE must use the same value type (DATE vs
-        DATE-TIME, and the same timezone rules) as the series' own DTSTART.
+        Returns its actual (start, end) bounds, or None if `occurrence`
+        doesn't correspond to any instance the series actually generates
+        (wrong time, wrong day, already excluded, ...).
+
+        Uses `recurring_ical_events` (already a transitive dependency of
+        `caldav`, via `icalendar`) to expand the series locally -- no extra
+        network round trip, since `instance_calendar` was already fetched.
+        This also returns the occurrence's start/end in the same value type
+        and timezone representation as the master's own DTSTART, since the
+        library operates on the icalendar object's native types without
+        renormalizing them.
         """
-        master_start = master["dtstart"].dt
-        if isinstance(master_start, datetime):
-            return as_utc(occurrence) if isinstance(occurrence, datetime) else occurrence
-        return occurrence.date() if isinstance(occurrence, datetime) else occurrence
+        window = timedelta(days=1)
+        candidates = recurring_ical_events.of(instance_calendar).between(
+            occurrence - window, occurrence + window
+        )
+        for component in candidates:
+            start = component["dtstart"].dt
+            if start == occurrence:
+                end = component["dtend"].dt if "dtend" in component else start
+                return start, end
+        return None
 
     def _find_or_create_exception(
         self,
         instance_calendar: icalendar.Calendar,
         master: icalendar.Event,
-        occurrence: datetime | date,
+        occurrence_start: datetime | date,
+        occurrence_end: datetime | date,
     ) -> icalendar.Event:
         """Find this occurrence's existing exception VEVENT, or create a new one.
 
         A new exception starts as a copy of the master's own top-level
-        fields (summary/description/location/start/end) -- but never its
-        RRULE (an exception instance must not itself recur) or VALARMs
+        fields (summary/description/location) -- but never its RRULE (an
+        exception instance must not itself recur) or VALARMs
         (`Component.copy()` already drops subcomponents; inheriting the
         master's reminders implicitly would be surprising for an instance
-        that didn't ask for any).
+        that didn't ask for any). Its DTSTART/DTEND are set to this specific
+        occurrence's own resolved bounds, not the master's -- otherwise an
+        update that doesn't also change start/end would leave the exception
+        dated at the master's first occurrence instead of the one being
+        edited.
         """
-        recurrence_id = self._recurrence_id_value(master, occurrence)
         for component in instance_calendar.subcomponents:
             if (
                 isinstance(component, icalendar.Event)
                 and "RECURRENCE-ID" in component
-                and component["RECURRENCE-ID"].dt == recurrence_id
+                and component["RECURRENCE-ID"].dt == occurrence_start
             ):
                 return component
 
         exception = master.copy()
         exception.pop("RRULE", None)
         exception.pop("RECURRENCE-ID", None)
-        exception.add("RECURRENCE-ID", recurrence_id)
+        exception.pop("dtstart", None)
+        exception.pop("dtend", None)
+        exception.add("RECURRENCE-ID", occurrence_start)
+        exception.add("dtstart", occurrence_start)
+        exception.add("dtend", occurrence_end)
         instance_calendar.add_component(exception)
         return exception
 

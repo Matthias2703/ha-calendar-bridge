@@ -10,16 +10,21 @@ from homeassistant.const import ATTR_DEVICE_ID
 from homeassistant.core import Context, ServiceCall
 from homeassistant.exceptions import ServiceValidationError
 
+from custom_components.calendar_bridge.caldav_target import CalDavAuthError, CalDavConnectionError
 from custom_components.calendar_bridge.const import (
     ATTR_ALL_DAY,
+    ATTR_END,
     ATTR_OCCURRENCE,
     ATTR_REMINDER_MINUTES,
+    ATTR_RRULE,
+    ATTR_START,
     ATTR_SUMMARY,
     ATTR_UID,
     CONF_CALENDAR_URL,
     DOMAIN,
 )
 from custom_components.calendar_bridge.services import (
+    async_handle_create_event,
     async_handle_delete_event,
     async_handle_update_event,
 )
@@ -181,6 +186,8 @@ async def test_update_event_builds_reminders_from_reminder_minutes():
                     ATTR_UID: "uid-1",
                     ATTR_REMINDER_MINUTES: 45,
                     ATTR_ALL_DAY: True,
+                    ATTR_START: datetime(2026, 10, 1, tzinfo=UTC),
+                    ATTR_END: datetime(2026, 10, 2, tzinfo=UTC),
                 }
             ),
         )
@@ -232,4 +239,135 @@ async def test_update_event_raises_when_not_found():
     ):
         await async_handle_update_event(
             hass, _call({ATTR_DEVICE_ID: _DEVICE_ID, ATTR_UID: "missing-uid"})
+        )
+
+
+@pytest.mark.asyncio
+async def test_update_event_rejects_occurrence_combined_with_rrule():
+    # A single occurrence's exception VEVENT must not itself recur.
+    hass = MagicMock()
+
+    with pytest.raises(ServiceValidationError):
+        await async_handle_update_event(
+            hass,
+            _call(
+                {
+                    ATTR_DEVICE_ID: _DEVICE_ID,
+                    ATTR_UID: "uid-1",
+                    ATTR_OCCURRENCE: datetime(2026, 10, 3, 9, 0, tzinfo=UTC),
+                    ATTR_RRULE: "FREQ=DAILY",
+                }
+            ),
+        )
+
+
+@pytest.mark.asyncio
+async def test_update_event_rejects_all_day_change_without_start_and_end():
+    # There's no sane default start/end to fall back to when all_day changes.
+    hass = MagicMock()
+
+    with pytest.raises(ServiceValidationError):
+        await async_handle_update_event(
+            hass, _call({ATTR_DEVICE_ID: _DEVICE_ID, ATTR_UID: "uid-1", ATTR_ALL_DAY: True})
+        )
+
+
+@pytest.mark.asyncio
+async def test_update_event_rejects_all_day_change_with_only_start():
+    hass = MagicMock()
+
+    with pytest.raises(ServiceValidationError):
+        await async_handle_update_event(
+            hass,
+            _call(
+                {
+                    ATTR_DEVICE_ID: _DEVICE_ID,
+                    ATTR_UID: "uid-1",
+                    ATTR_ALL_DAY: True,
+                    ATTR_START: datetime(2026, 10, 1, tzinfo=UTC),
+                }
+            ),
+        )
+
+
+@pytest.mark.asyncio
+async def test_update_event_allows_all_day_change_with_both_start_and_end():
+    target = MagicMock()
+    target.async_update_event = AsyncMock(return_value=True)
+    hass, entry = _make_hass_and_entry(target)
+
+    with patch(
+        "custom_components.calendar_bridge.services.async_resolve_device",
+        return_value=(entry, "sub1"),
+    ):
+        result = await async_handle_update_event(
+            hass,
+            _call(
+                {
+                    ATTR_DEVICE_ID: _DEVICE_ID,
+                    ATTR_UID: "uid-1",
+                    ATTR_ALL_DAY: True,
+                    ATTR_START: datetime(2026, 10, 1, tzinfo=UTC),
+                    ATTR_END: datetime(2026, 10, 2, tzinfo=UTC),
+                }
+            ),
+        )
+
+    assert result == {"updated": True}
+
+
+@pytest.mark.asyncio
+async def test_create_event_raises_calendar_unavailable_on_connection_error():
+    target = MagicMock()
+    target.async_create_event = AsyncMock(side_effect=CalDavConnectionError())
+    hass, entry = _make_hass_and_entry(target)
+
+    with (
+        patch(
+            "custom_components.calendar_bridge.services.async_resolve_device",
+            return_value=(entry, "sub1"),
+        ),
+        pytest.raises(ServiceValidationError),
+    ):
+        await async_handle_create_event(
+            hass,
+            _call(
+                {
+                    ATTR_DEVICE_ID: [_DEVICE_ID],
+                    ATTR_SUMMARY: "Test",
+                    ATTR_START: datetime(2026, 10, 1, 9, 0, tzinfo=UTC),
+                    ATTR_ALL_DAY: False,
+                    ATTR_REMINDER_MINUTES: 30,
+                }
+            ),
+        )
+
+
+@pytest.mark.asyncio
+async def test_create_event_raises_calendar_unavailable_on_auth_error():
+    # A rejected-credentials failure already triggers reauth (inside the
+    # target); the service call itself must still fail cleanly, not with an
+    # unhandled exception.
+    target = MagicMock()
+    target.async_create_event = AsyncMock(side_effect=CalDavAuthError())
+    hass, entry = _make_hass_and_entry(target)
+
+    with (
+        patch(
+            "custom_components.calendar_bridge.services.async_resolve_device",
+            return_value=(entry, "sub1"),
+        ),
+        pytest.raises(ServiceValidationError),
+    ):
+        await async_handle_create_event(
+            hass,
+            _call(
+                {
+                    ATTR_DEVICE_ID: [_DEVICE_ID],
+                    ATTR_SUMMARY: "Test",
+                    ATTR_START: datetime(2026, 10, 1, 9, 0, tzinfo=UTC),
+                    ATTR_ALL_DAY: False,
+                    ATTR_REMINDER_MINUTES: 30,
+                }
+            ),
         )

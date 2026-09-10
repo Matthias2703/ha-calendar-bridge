@@ -5,12 +5,17 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, date, datetime, time, timedelta
 from unittest.mock import MagicMock, patch
+from zoneinfo import ZoneInfo
 
 import caldav
 import icalendar
 import pytest
 
-from custom_components.calendar_bridge.caldav_target import CalDavAuthError, CalDavCalendarTarget
+from custom_components.calendar_bridge.caldav_target import (
+    CalDavAuthError,
+    CalDavCalendarTarget,
+    CalDavConnectionError,
+)
 from custom_components.calendar_bridge.target import (
     CalendarNotFoundError,
     EventSpec,
@@ -330,9 +335,19 @@ def _mock_caldav_event(
     summary: str,
     has_alarm: bool,
     start: datetime | date = datetime(2026, 10, 1, 9, 0, tzinfo=UTC),
+    uid: str | None = None,
 ) -> MagicMock:
-    """A mock CalendarObjectResource wrapping a real icalendar.Event."""
+    """A mock CalendarObjectResource wrapping a real icalendar.Event.
+
+    `icalendar_instance` (as returned by `calendar.event_by_uid()`, which the
+    backfill methods now re-fetch through before mutating/saving -- see
+    `_backfill_reminder`/`_backfill_new_events`) wraps the same component.
+    `uid` is left unset by default since several existing callers add it
+    themselves afterward via `.icalendar_component.add("uid", ...)`.
+    """
     component = icalendar.Event()
+    if uid is not None:
+        component.add("uid", uid)
     component.add("summary", summary)
     component.add("dtstart", start)
     if has_alarm:
@@ -340,8 +355,11 @@ def _mock_caldav_event(
         alarm.add("action", "DISPLAY")
         alarm.add("trigger", timedelta(minutes=-30))
         component.add_component(alarm)
+    cal = icalendar.Calendar()
+    cal.add_component(component)
     mock_event = MagicMock()
     mock_event.icalendar_component = component
+    mock_event.icalendar_instance = cal
     return mock_event
 
 
@@ -350,8 +368,9 @@ async def test_backfill_adds_reminder_to_matching_event_without_one():
     target = _make_target()
     calendar_ref = "https://example.test/cal/"
     mock_client, mock_calendar = _mock_client_with_calendar(calendar_ref)
-    mock_event = _mock_caldav_event("Native Termin", has_alarm=False)
+    mock_event = _mock_caldav_event("Native Termin", has_alarm=False, uid="native-uid-1")
     mock_calendar.date_search.return_value = [mock_event]
+    mock_calendar.event_by_uid.return_value = mock_event
 
     with patch(
         "custom_components.calendar_bridge.caldav_target.build_client", return_value=mock_client
@@ -361,6 +380,7 @@ async def test_backfill_adds_reminder_to_matching_event_without_one():
         )
 
     assert patched is True
+    mock_calendar.event_by_uid.assert_called_once_with("native-uid-1")
     mock_event.save.assert_called_once()
     alarms = list(mock_event.icalendar_component.walk("VALARM"))
     assert len(alarms) == 1
@@ -372,8 +392,9 @@ async def test_backfill_skips_event_that_already_has_a_reminder():
     target = _make_target()
     calendar_ref = "https://example.test/cal/"
     mock_client, mock_calendar = _mock_client_with_calendar(calendar_ref)
-    mock_event = _mock_caldav_event("Native Termin", has_alarm=True)
+    mock_event = _mock_caldav_event("Native Termin", has_alarm=True, uid="native-uid-1")
     mock_calendar.date_search.return_value = [mock_event]
+    mock_calendar.event_by_uid.return_value = mock_event
 
     with patch(
         "custom_components.calendar_bridge.caldav_target.build_client", return_value=mock_client
@@ -391,8 +412,9 @@ async def test_backfill_ignores_event_with_a_different_summary():
     target = _make_target()
     calendar_ref = "https://example.test/cal/"
     mock_client, mock_calendar = _mock_client_with_calendar(calendar_ref)
-    mock_event = _mock_caldav_event("Some Other Event", has_alarm=False)
+    mock_event = _mock_caldav_event("Some Other Event", has_alarm=False, uid="native-uid-1")
     mock_calendar.date_search.return_value = [mock_event]
+    mock_calendar.event_by_uid.return_value = mock_event
 
     with patch(
         "custom_components.calendar_bridge.caldav_target.build_client", return_value=mock_client
@@ -413,8 +435,11 @@ async def test_backfill_reminder_anchors_all_day_event_to_time_of_day():
     target = _make_target()
     calendar_ref = "https://example.test/cal/"
     mock_client, mock_calendar = _mock_client_with_calendar(calendar_ref)
-    mock_event = _mock_caldav_event("Birthday", has_alarm=False, start=date(2026, 10, 1))
+    mock_event = _mock_caldav_event(
+        "Birthday", has_alarm=False, start=date(2026, 10, 1), uid="native-uid-1"
+    )
     mock_calendar.date_search.return_value = [mock_event]
+    mock_calendar.event_by_uid.return_value = mock_event
 
     with patch(
         "custom_components.calendar_bridge.caldav_target.build_client", return_value=mock_client
@@ -483,6 +508,7 @@ async def test_poll_seen_event_carries_summary_and_start():
     event = _mock_caldav_event("Dentist", has_alarm=False, start=start)
     event.icalendar_component.add("uid", "uid-1")
     mock_calendar.date_search.return_value = [event]
+    mock_calendar.event_by_uid.return_value = event
 
     seen = await _poll(target, calendar_ref, mock_calendar, known_uids=set())
 
@@ -497,11 +523,13 @@ async def test_poll_backfills_a_new_reminder_less_event():
     event = _mock_caldav_event("Native Termin", has_alarm=False)
     event.icalendar_component.add("uid", "uid-1")
     mock_calendar.date_search.return_value = [event]
+    mock_calendar.event_by_uid.return_value = event
 
     seen = await _poll(target, calendar_ref, mock_calendar, known_uids=set())
 
     assert seen is not None
     assert {e.uid for e in seen} == {"uid-1"}
+    mock_calendar.event_by_uid.assert_called_once_with("uid-1")
     event.save.assert_called_once()
     assert list(event.icalendar_component.walk("VALARM"))
 
@@ -514,6 +542,7 @@ async def test_poll_backfills_all_day_event_anchored_to_time_of_day():
     event = _mock_caldav_event("Birthday", has_alarm=False, start=date(2026, 10, 1))
     event.icalendar_component.add("uid", "uid-1")
     mock_calendar.date_search.return_value = [event]
+    mock_calendar.event_by_uid.return_value = event
 
     seen = await _poll(target, calendar_ref, mock_calendar, known_uids=set())
 
@@ -557,6 +586,32 @@ async def test_poll_with_skip_backfill_only_collects_uids():
 
 
 @pytest.mark.asyncio
+async def test_poll_backfill_does_not_destroy_the_series_rrule():
+    # Same concern as `test_backfill_reminder_does_not_destroy_the_series_rrule`,
+    # for the polling path.
+    target = _make_target()
+    calendar_ref = "https://example.test/cal/"
+    mock_calendar = MagicMock()
+
+    expanded_event = _mock_caldav_event(
+        "Standup", has_alarm=False, start=datetime(2026, 10, 15, 9, 0, tzinfo=UTC), uid="series-1"
+    )
+    mock_calendar.date_search.return_value = [expanded_event]
+
+    real_event = _mock_recurring_event("series-1", datetime(2026, 10, 1, 9, 0, tzinfo=UTC))
+    mock_calendar.event_by_uid.return_value = real_event
+
+    seen = await _poll(target, calendar_ref, mock_calendar, known_uids=set())
+
+    assert seen is not None
+    real_event.save.assert_called_once()
+    expanded_event.save.assert_not_called()
+    master = real_event.icalendar_component
+    assert "RRULE" in master
+    assert list(master.walk("VALARM"))
+
+
+@pytest.mark.asyncio
 async def test_poll_returns_none_when_calendar_not_found():
     # Distinct from "genuinely zero events": the caller must not persist an
     # empty baseline for a calendar the lookup itself couldn't find.
@@ -579,8 +634,9 @@ async def test_backfill_reminder_dry_run_does_not_save():
     target = _make_target()
     calendar_ref = "https://example.test/cal/"
     mock_client, mock_calendar = _mock_client_with_calendar(calendar_ref)
-    mock_event = _mock_caldav_event("Native Termin", has_alarm=False)
+    mock_event = _mock_caldav_event("Native Termin", has_alarm=False, uid="native-uid-1")
     mock_calendar.date_search.return_value = [mock_event]
+    mock_calendar.event_by_uid.return_value = mock_event
 
     with patch(
         "custom_components.calendar_bridge.caldav_target.build_client", return_value=mock_client
@@ -596,6 +652,44 @@ async def test_backfill_reminder_dry_run_does_not_save():
 
     assert found is True
     mock_event.save.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_backfill_reminder_does_not_destroy_the_series_rrule():
+    # `date_search` expands a recurring event client-side into a flattened,
+    # RRULE-less copy -- mutating and saving *that* object would permanently
+    # destroy the series on the server. The backfill must re-fetch the real,
+    # unexpanded event (via `event_by_uid`) before writing anything.
+    target = _make_target()
+    calendar_ref = "https://example.test/cal/"
+    mock_client, mock_calendar = _mock_client_with_calendar(calendar_ref)
+
+    expanded_event = _mock_caldav_event(
+        "Standup", has_alarm=False, start=datetime(2026, 10, 15, 9, 0, tzinfo=UTC), uid="series-1"
+    )
+    mock_calendar.date_search.return_value = [expanded_event]
+
+    real_event = _mock_recurring_event("series-1", datetime(2026, 10, 1, 9, 0, tzinfo=UTC))
+    mock_calendar.event_by_uid.return_value = real_event
+
+    with patch(
+        "custom_components.calendar_bridge.caldav_target.build_client", return_value=mock_client
+    ):
+        patched = await target.async_backfill_reminder(
+            calendar_ref, "Standup", datetime(2026, 10, 15, 9, 0, tzinfo=UTC), 30, "popup"
+        )
+
+    assert patched is True
+    mock_calendar.event_by_uid.assert_called_once_with("series-1")
+    # The real (unexpanded, still-recurring) object was saved -- not the
+    # flattened search-result object.
+    real_event.save.assert_called_once()
+    expanded_event.save.assert_not_called()
+    master = real_event.icalendar_component
+    assert "RRULE" in master
+    alarms = list(master.walk("VALARM"))
+    assert len(alarms) == 1
+    assert str(alarms[0]["action"]) == "DISPLAY"
 
 
 @pytest.mark.asyncio
@@ -966,6 +1060,10 @@ async def test_update_event_with_occurrence_twice_reuses_the_same_exception():
     exception = next(v for v in vevents if "RECURRENCE-ID" in v)
     assert str(exception["summary"]) == "First edit"
     assert str(exception["location"]) == "Room 2"
+    # The exception is dated at the occurrence being edited, not the
+    # master's own (Oct 1) start -- neither edit passed a `start`.
+    assert exception["dtstart"].dt == occurrence
+    assert exception["dtend"].dt == occurrence + timedelta(minutes=30)
 
 
 @pytest.mark.asyncio
@@ -1012,3 +1110,140 @@ async def test_delete_event_with_occurrence_also_removes_its_existing_exception(
 
     assert deleted is True
     assert len(_vevents(mock_event.icalendar_instance)) == 1
+
+
+@pytest.mark.asyncio
+async def test_delete_event_with_a_nonexistent_occurrence_returns_false():
+    # A daily series has no Wednesday-only occurrence -- an off-by-one-week
+    # or wrong-time `occurrence` must not be silently accepted as a match.
+    target = _make_target()
+    calendar_ref = "https://example.test/cal/"
+    mock_client, mock_calendar = _mock_client_with_calendar(calendar_ref)
+    mock_event = _mock_recurring_event(
+        "series-1", datetime(2026, 10, 1, 9, 0, tzinfo=UTC), rrule="FREQ=WEEKLY"
+    )
+    mock_calendar.event_by_uid.return_value = mock_event
+    # Oct 1, 2026 is a Thursday -- Oct 2 (Friday) is never generated.
+    wrong_occurrence = datetime(2026, 10, 2, 9, 0, tzinfo=UTC)
+
+    with patch(
+        "custom_components.calendar_bridge.caldav_target.build_client", return_value=mock_client
+    ):
+        deleted = await target.async_delete_event(
+            calendar_ref, "series-1", occurrence=wrong_occurrence
+        )
+
+    assert deleted is False
+    mock_event.save.assert_not_called()
+    assert len(_vevents(mock_event.icalendar_instance)) == 1  # nothing was added
+
+
+@pytest.mark.asyncio
+async def test_update_event_with_a_nonexistent_occurrence_returns_false():
+    target = _make_target()
+    calendar_ref = "https://example.test/cal/"
+    mock_client, mock_calendar = _mock_client_with_calendar(calendar_ref)
+    mock_event = _mock_recurring_event(
+        "series-1", datetime(2026, 10, 1, 9, 0, tzinfo=UTC), rrule="FREQ=WEEKLY"
+    )
+    mock_calendar.event_by_uid.return_value = mock_event
+    wrong_occurrence = datetime(2026, 10, 2, 9, 0, tzinfo=UTC)
+
+    with patch(
+        "custom_components.calendar_bridge.caldav_target.build_client", return_value=mock_client
+    ):
+        updated = await target.async_update_event(
+            calendar_ref, "series-1", EventUpdate(summary="New"), occurrence=wrong_occurrence
+        )
+
+    assert updated is False
+    mock_event.save.assert_not_called()
+    assert len(_vevents(mock_event.icalendar_instance)) == 1
+
+
+@pytest.mark.asyncio
+async def test_update_event_with_occurrence_preserves_the_masters_own_timezone():
+    # RECURRENCE-ID/DTSTART on the new exception must match the master's own
+    # timezone representation (RFC 5545), not be forced to UTC.
+    target = _make_target()
+    calendar_ref = "https://example.test/cal/"
+    mock_client, mock_calendar = _mock_client_with_calendar(calendar_ref)
+    berlin = ZoneInfo("Europe/Berlin")
+    mock_event = _mock_recurring_event(
+        "series-1", datetime(2026, 10, 1, 9, 0, tzinfo=berlin), rrule="FREQ=WEEKLY"
+    )
+    mock_calendar.event_by_uid.return_value = mock_event
+    # The caller identifies the occurrence in UTC (as HA's cv.datetime would),
+    # but it's the same instant as 2026-10-15 09:00 Europe/Berlin.
+    occurrence = datetime(2026, 10, 15, 7, 0, tzinfo=UTC)
+
+    with patch(
+        "custom_components.calendar_bridge.caldav_target.build_client", return_value=mock_client
+    ):
+        updated = await target.async_update_event(
+            calendar_ref, "series-1", EventUpdate(location="Room 2"), occurrence=occurrence
+        )
+
+    assert updated is True
+    exception = next(
+        v for v in _vevents(mock_event.icalendar_instance) if "RECURRENCE-ID" in v
+    )
+    assert exception["dtstart"].dt.tzinfo == berlin
+    assert exception["recurrence-id"].dt.tzinfo == berlin
+
+
+@pytest.mark.asyncio
+async def test_delete_event_with_occurrence_returns_false_on_save_error():
+    target = _make_target()
+    calendar_ref = "https://example.test/cal/"
+    mock_client, mock_calendar = _mock_client_with_calendar(calendar_ref)
+    mock_event = _mock_recurring_event("series-1", datetime(2026, 10, 1, 9, 0, tzinfo=UTC))
+    mock_event.save.side_effect = caldav.lib.error.PutError("conflict")
+    mock_calendar.event_by_uid.return_value = mock_event
+    occurrence = datetime(2026, 10, 5, 9, 0, tzinfo=UTC)
+
+    with patch(
+        "custom_components.calendar_bridge.caldav_target.build_client", return_value=mock_client
+    ):
+        deleted = await target.async_delete_event(calendar_ref, "series-1", occurrence=occurrence)
+
+    assert deleted is False
+
+
+@pytest.mark.asyncio
+async def test_update_event_returns_false_on_save_error():
+    target = _make_target()
+    calendar_ref = "https://example.test/cal/"
+    mock_client, mock_calendar = _mock_client_with_calendar(calendar_ref)
+    mock_event = _mock_uid_event("Dentist", datetime(2026, 10, 1, 9, 0, tzinfo=UTC))
+    mock_event.save.side_effect = caldav.lib.error.PutError("conflict")
+    mock_calendar.event_by_uid.return_value = mock_event
+
+    with patch(
+        "custom_components.calendar_bridge.caldav_target.build_client", return_value=mock_client
+    ):
+        updated = await target.async_update_event(
+            calendar_ref, "evt-uid-1", EventUpdate(summary="New")
+        )
+
+    assert updated is False
+
+
+@pytest.mark.asyncio
+async def test_create_event_propagates_a_plain_connection_error():
+    # Unlike the other four CalDAV methods (which have a bool/None sentinel
+    # for "couldn't reach the server"), async_create_event must return a real
+    # uid or fail loudly -- it must not silently swallow a connection error.
+    target = _make_target()
+    mock_client = MagicMock()
+    mock_client.principal.side_effect = caldav.lib.error.DAVError("unreachable")
+    spec = EventSpec(summary="Plain", start=datetime(2026, 10, 1, 9, 0, tzinfo=UTC))
+
+    with (
+        patch(
+            "custom_components.calendar_bridge.caldav_target.build_client",
+            return_value=mock_client,
+        ),
+        pytest.raises(CalDavConnectionError),
+    ):
+        await target.async_create_event("https://example.test/cal/", spec)

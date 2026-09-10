@@ -91,12 +91,17 @@ def _patched(target: GoogleCalendarTarget, service: _FakeService, auth: Any = No
     return patch.object(target, "_async_service", AsyncMock(return_value=(service, auth)))
 
 
-def _auth_finding(event_id: str | None) -> AsyncMock:
-    """A fake auth whose get_json() resolves iCalUID lookups to event_id (or none)."""
+def _auth_finding_item(item: dict[str, Any] | None) -> AsyncMock:
+    """A fake auth whose get_json() resolves an iCalUID lookup to the given raw item."""
     auth = AsyncMock()
-    items = [{"id": event_id}] if event_id is not None else []
+    items = [item] if item is not None else []
     auth.get_json = AsyncMock(return_value={"items": items})
     return auth
+
+
+def _auth_finding(event_id: str | None) -> AsyncMock:
+    """A fake auth whose get_json() resolves iCalUID lookups to event_id (or none)."""
+    return _auth_finding_item({"id": event_id} if event_id is not None else None)
 
 
 def _auth_finding_instances(master_id: str, instance_items: list[dict[str, Any]]) -> AsyncMock:
@@ -513,11 +518,20 @@ async def test_update_event_patches_only_the_given_fields():
 
 
 @pytest.mark.asyncio
-async def test_update_event_fetches_current_state_to_resolve_all_day_reminders():
+async def test_update_event_resolves_all_day_reminders_from_the_looked_up_item():
+    # `current` used to come from a second `events.get` round trip; it must
+    # now be built from the same item already returned while resolving the
+    # event id, with no extra request.
     target = _make_target()
-    current = _google_event("evt1", "Birthday", all_day=True)
-    service = _FakeService(get_event=current)
-    auth = _auth_finding("evt1")
+    service = _FakeService()
+    item = {
+        "id": "evt1",
+        "iCalUID": "evt1",
+        "summary": "Birthday",
+        "start": {"date": "2026-09-10"},
+        "end": {"date": "2026-09-11"},
+    }
+    auth = _auth_finding_item(item)
 
     with _patched(target, service, auth):
         updated = await target.async_update_event(
@@ -527,7 +541,7 @@ async def test_update_event_fetches_current_state_to_resolve_all_day_reminders()
         )
 
     assert updated is True
-    service.async_get_event.assert_awaited_once_with(_CALENDAR_REF, "evt1")
+    service.async_get_event.assert_not_awaited()
     body = service.async_patch_event.call_args[0][2]
     # All-day, so the reminder anchors to 1 day before at 09:00 (900 minutes
     # before midnight), not a naive 30 minutes before start.
@@ -594,8 +608,7 @@ async def test_delete_event_with_occurrence_not_found_returns_false():
 async def test_update_event_with_occurrence_patches_the_specific_instance():
     target = _make_target()
     occurrence = datetime(2026, 10, 3, 9, 0, tzinfo=UTC)
-    instance = _google_event("master1_20261003T090000Z", "Standup", ical_uuid="series-uid")
-    service = _FakeService(get_event=instance)
+    service = _FakeService()
     instance_items = [
         {
             "id": "master1_20261003T090000Z",
@@ -616,3 +629,68 @@ async def test_update_event_with_occurrence_patches_the_specific_instance():
     service.async_patch_event.assert_awaited_once_with(
         _CALENDAR_REF, "master1_20261003T090000Z", {"summary": "Standup (moved)"}
     )
+
+
+@pytest.mark.asyncio
+async def test_update_event_with_occurrence_reuses_the_instance_item_for_current_state():
+    # `current` used to come from a second `events.get` round trip keyed by
+    # the resolved instance id; it must now be built from the instance item
+    # already returned by the /instances lookup, with no extra request.
+    target = _make_target()
+    occurrence = datetime(2026, 10, 3, 9, 0, tzinfo=UTC)
+    service = _FakeService()
+    instance_items = [
+        {
+            "id": "master1_20261003T090000Z",
+            "originalStartTime": {"dateTime": "2026-10-03T09:00:00Z"},
+            "summary": "Standup",
+            "start": {"dateTime": "2026-10-03T09:00:00Z"},
+            "end": {"dateTime": "2026-10-03T09:30:00Z"},
+        },
+    ]
+    auth = _auth_finding_instances("master1", instance_items)
+
+    with _patched(target, service, auth):
+        updated = await target.async_update_event(
+            _CALENDAR_REF,
+            "series-uid",
+            EventUpdate(reminders=(ReminderSpec(minutes_before=30),)),
+            occurrence=occurrence,
+        )
+
+    assert updated is True
+    service.async_get_event.assert_not_awaited()
+    body = service.async_patch_event.call_args[0][2]
+    # Not all-day (the instance item's own start has a dateTime), so the
+    # reminder is a plain 30 minutes before, not the all-day 900-minute anchor.
+    assert body["reminders"]["overrides"] == [{"method": "popup", "minutes": 30}]
+
+
+@pytest.mark.asyncio
+async def test_instance_lookup_uses_a_wide_search_window_around_the_original_time():
+    # timeMin/timeMax bound each instance's *current* (possibly already
+    # rescheduled) time, not its original slot -- a narrow window anchored to
+    # `occurrence` could miss an instance that has since been moved far from
+    # its original time. The actual match is still exact, via
+    # originalStartTime, so widening the window only helps, never hurts.
+    target = _make_target()
+    service = _FakeService()
+    occurrence = datetime(2026, 10, 3, 9, 0, tzinfo=UTC)
+    instance_items = [
+        {
+            "id": "master1_20261003T090000Z",
+            "originalStartTime": {"dateTime": "2026-10-03T09:00:00Z"},
+        },
+    ]
+    auth = _auth_finding_instances("master1", instance_items)
+
+    with _patched(target, service, auth):
+        deleted = await target.async_delete_event(
+            _CALENDAR_REF, "series-uid", occurrence=occurrence
+        )
+
+    assert deleted is True
+    instances_call = next(c for c in auth.get_json.call_args_list if "/instances" in c.args[0])
+    params = instances_call.kwargs["params"]
+    window = datetime.fromisoformat(params["timeMax"]) - datetime.fromisoformat(params["timeMin"])
+    assert window >= timedelta(days=180)

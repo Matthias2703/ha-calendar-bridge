@@ -63,5 +63,5 @@ async def async_get_config_entry_diagnostics(
         "backend": "google" if CONF_GOOGLE_ENTRY_ID in entry.data else "caldav",
         "calendar_count": len(entry.subentries),
         "subentries": subentries,
-        "pending_ha_notifications": scheduler.pending_count(),
+        "pending_ha_notifications": scheduler.pending_count(entry.entry_id),
     }

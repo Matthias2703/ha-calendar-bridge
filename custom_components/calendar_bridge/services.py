@@ -16,6 +16,7 @@ from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers import config_validation as cv
 from homeassistant.util import dt as dt_util
 
+from .caldav_target import CalDavAuthError, CalDavConnectionError
 from .const import (
     ATTR_ALL_DAY,
     ATTR_DESCRIPTION,
@@ -52,6 +53,7 @@ from .target import (
     EventSpec,
     EventUpdate,
     ReminderSpec,
+    effective_reminder_minutes,
     render_notify_message,
 )
 
@@ -214,10 +216,18 @@ async def async_handle_create_event(hass: HomeAssistant, call: ServiceCall) -> S
                 translation_key="calendar_not_found",
                 translation_placeholders={"device_id": device_id},
             ) from err
+        except (CalDavAuthError, CalDavConnectionError) as err:
+            raise ServiceValidationError(
+                translation_domain=DOMAIN,
+                translation_key="calendar_unavailable",
+                translation_placeholders={"device_id": device_id},
+            ) from err
         created[device_id] = uid
 
         if ATTR_NOTIFY in call.data:
-            await _async_schedule_notification(hass, call.data[ATTR_NOTIFY], base_spec)
+            await _async_schedule_notification(
+                hass, entry.entry_id, call.data[ATTR_NOTIFY], base_spec
+            )
 
     return {"created": created}
 
@@ -265,6 +275,26 @@ async def async_handle_delete_event(hass: HomeAssistant, call: ServiceCall) -> S
 
 async def async_handle_update_event(hass: HomeAssistant, call: ServiceCall) -> ServiceResponse:
     """Apply the given (only the provided) fields to one existing event."""
+    if ATTR_ALL_DAY in call.data and (
+        ATTR_START not in call.data or ATTR_END not in call.data
+    ):
+        # There's no sane default "start"/"end" to fall back to when the
+        # all-day-ness of an event changes: reusing the stored (already
+        # UTC-normalized) values either produces a VEVENT with mismatched
+        # DATE/DATE-TIME types, or shifts the event to the wrong calendar
+        # day. Require the caller to say exactly what the new bounds are
+        # instead of guessing.
+        raise ServiceValidationError(
+            translation_domain=DOMAIN,
+            translation_key="all_day_change_needs_start_and_end",
+        )
+    if ATTR_OCCURRENCE in call.data and ATTR_RRULE in call.data:
+        # A single occurrence's exception VEVENT must not itself recur.
+        raise ServiceValidationError(
+            translation_domain=DOMAIN,
+            translation_key="occurrence_with_rrule_not_supported",
+        )
+
     entry, subentry_id = _async_resolve_single_device(hass, call.data)
     subentry = entry.subentries[subentry_id]
     target = entry.runtime_data
@@ -295,20 +325,24 @@ async def async_handle_update_event(hass: HomeAssistant, call: ServiceCall) -> S
 
 
 async def _async_schedule_notification(
-    hass: HomeAssistant, notify_data: dict[str, Any], spec: EventSpec
+    hass: HomeAssistant, entry_id: str, notify_data: dict[str, Any], spec: EventSpec
 ) -> None:
     """Schedule the optional HA-native notification reminder."""
-    # spec.start is a plain datetime in practice (all-day events don't carry
-    # a "minutes before" notification), but EventSpec types it as
-    # `datetime | date` for the CalDAV all-day path -- narrow it here.
+    # EventSpec types `start` as `datetime | date` for the CalDAV all-day
+    # path -- narrow it to a real datetime here (midnight for an all-day
+    # event); `effective_reminder_minutes` below still anchors an all-day
+    # event's actual fire time to a sane hour instead of that midnight.
     start = (
         spec.start if isinstance(spec.start, datetime) else datetime.combine(spec.start, time.min)
+    )
+    effective_minutes = effective_reminder_minutes(
+        spec.all_day, notify_data[ATTR_MINUTES_BEFORE], None
     )
     # HA's cv.datetime returns a naive datetime for a call without a UTC
     # offset -- async_track_point_in_time needs a tz-aware one to compare
     # against dt_util.utcnow() correctly.
-    fire_at = dt_util.as_utc(start) - timedelta(minutes=notify_data[ATTR_MINUTES_BEFORE])
+    fire_at = dt_util.as_utc(start) - timedelta(minutes=effective_minutes)
     message = render_notify_message(notify_data.get(ATTR_NOTIFY_MESSAGE), spec.summary, spec.start)
 
     scheduler: ReminderScheduler = hass.data[DOMAIN]["reminder_scheduler"]
-    await scheduler.async_schedule(notify_data[ATTR_NOTIFY_TARGET], fire_at, message)
+    await scheduler.async_schedule(notify_data[ATTR_NOTIFY_TARGET], fire_at, message, entry_id)

@@ -210,6 +210,15 @@
     },
     "event_not_found": {
       "message": "Kein Termin mit der uid {uid} auf diesem Kalender gefunden. Er wurde möglicherweise bereits gelöscht."
+    },
+    "calendar_unavailable": {
+      "message": "Der Kalender für Gerät {device_id} konnte gerade nicht erreicht werden. Bitte versuche es erneut."
+    },
+    "all_day_change_needs_start_and_end": {
+      "message": "Beim Ändern von all_day müssen auch start und end angegeben werden, damit die neuen Termingrenzen eindeutig sind."
+    },
+    "occurrence_with_rrule_not_supported": {
+      "message": "Eine einzelne Instanz kann keine eigene rrule haben -- gib occurrence an, um eine Instanz zu ändern, oder rrule, um die ganze Serie zu ändern, aber nicht beides."
     }
   },
   "services": {

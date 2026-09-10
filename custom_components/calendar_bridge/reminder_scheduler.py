@@ -38,11 +38,16 @@ class ReminderScheduler:
     def __init__(self, hass: HomeAssistant) -> None:
         self._hass = hass
         self._store: Store[dict[str, Any]] = Store(hass, _STORAGE_VERSION, _STORAGE_KEY)
-        self._unsub: dict[str, Any] = {}
+        # (unsub callback, owning config entry id) per pending reminder id --
+        # the entry id lets diagnostics report a count scoped to one account
+        # instead of this whole, domain-wide scheduler.
+        self._unsub: dict[str, tuple[Any, str]] = {}
 
-    def pending_count(self) -> int:
-        """How many HA-notification reminders are currently scheduled (for diagnostics)."""
-        return len(self._unsub)
+    def pending_count(self, entry_id: str) -> int:
+        """How many HA-notification reminders are scheduled for this entry (for diagnostics)."""
+        return sum(
+            1 for _unsub, reminder_entry_id in self._unsub.values() if reminder_entry_id == entry_id
+        )
 
     async def async_load(self) -> None:
         """Reschedule reminders that were pending before a restart."""
@@ -65,10 +70,13 @@ class ReminderScheduler:
         if len(kept) != len(reminders):
             await self._store.async_save({"reminders": kept})
 
-    async def async_schedule(self, target: str, fire_at: datetime, message: str) -> None:
+    async def async_schedule(
+        self, target: str, fire_at: datetime, message: str, entry_id: str
+    ) -> None:
         """Persist and schedule one reminder notification."""
         reminder = {
             "id": str(uuid.uuid4()),
+            "entry_id": entry_id,
             "target": target,
             "message": message,
             "fire_at": fire_at.isoformat(),
@@ -83,7 +91,11 @@ class ReminderScheduler:
             await self._async_send(reminder)
             await self._async_discard(reminder["id"])
 
-        self._unsub[reminder["id"]] = async_track_point_in_time(self._hass, _fire, fire_at)
+        unsub = async_track_point_in_time(self._hass, _fire, fire_at)
+        # `.get(...)` falls back to "" for a reminder persisted before this
+        # field existed -- it just won't be attributed to any entry's
+        # diagnostics count until it fires and is discarded.
+        self._unsub[reminder["id"]] = (unsub, reminder.get("entry_id", ""))
 
     async def _async_send(self, reminder: dict[str, Any]) -> None:
         await self._hass.services.async_call(

@@ -56,7 +56,7 @@ from .services import (
     async_handle_delete_event,
     async_handle_update_event,
 )
-from .target import SeenEvent, render_notify_message
+from .target import SeenEvent, effective_reminder_minutes, render_notify_message
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -116,6 +116,7 @@ def _notify_settings(subentry: Any) -> tuple[str, int, str | None] | None:
 
 async def _async_schedule_ha_notification(
     scheduler: ReminderScheduler,
+    entry_id: str,
     target: str,
     minutes_before: int,
     summary: str,
@@ -123,13 +124,15 @@ async def _async_schedule_ha_notification(
     message_template: str | None = None,
 ) -> None:
     """Schedule an HA-native notification for a newly-detected calendar event."""
+    all_day = not isinstance(start, datetime)
     start_dt = (
         start if isinstance(start, datetime) else datetime.combine(start, datetime.min.time())
     )
-    fire_at = dt_util.as_utc(start_dt) - timedelta(minutes=minutes_before)
-    message = render_notify_message(message_template, summary, start)
+    effective_minutes = effective_reminder_minutes(all_day, minutes_before, None)
+    fire_at = dt_util.as_utc(start_dt) - timedelta(minutes=effective_minutes)
     try:
-        await scheduler.async_schedule(target, fire_at, message)
+        message = render_notify_message(message_template, summary, start)
+        await scheduler.async_schedule(target, fire_at, message, entry_id)
     except Exception:  # noqa: BLE001 -- one failed schedule must not break the poll
         _LOGGER.warning("Failed to schedule an HA notification for '%s'", summary, exc_info=True)
 
@@ -316,6 +319,7 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
                             continue
                         await _async_schedule_ha_notification(
                             scheduler,
+                            entry.entry_id,
                             notify_target,
                             notify_minutes_before,
                             seen.summary,

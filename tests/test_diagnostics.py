@@ -68,6 +68,9 @@ async def test_diagnostics_reports_backend_and_counts():
     assert result["backend"] == "caldav"
     assert result["calendar_count"] == 1
     assert result["pending_ha_notifications"] == 3
+    # Scoped to this entry -- the scheduler is shared domain-wide across
+    # every configured account.
+    hass.data[DOMAIN]["reminder_scheduler"].pending_count.assert_called_once_with(entry.entry_id)
     subentry_diag = result["subentries"][0]
     assert subentry_diag["default_target"] is True
     assert subentry_diag["notify_enabled"] is True
