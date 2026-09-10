@@ -275,9 +275,7 @@ async def async_handle_delete_event(hass: HomeAssistant, call: ServiceCall) -> S
 
 async def async_handle_update_event(hass: HomeAssistant, call: ServiceCall) -> ServiceResponse:
     """Apply the given (only the provided) fields to one existing event."""
-    if ATTR_ALL_DAY in call.data and (
-        ATTR_START not in call.data or ATTR_END not in call.data
-    ):
+    if ATTR_ALL_DAY in call.data and (ATTR_START not in call.data or ATTR_END not in call.data):
         # There's no sane default "start"/"end" to fall back to when the
         # all-day-ness of an event changes: reusing the stored (already
         # UTC-normalized) values either produces a VEVENT with mismatched

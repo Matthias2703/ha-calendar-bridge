@@ -1185,9 +1185,7 @@ async def test_update_event_with_occurrence_preserves_the_masters_own_timezone()
         )
 
     assert updated is True
-    exception = next(
-        v for v in _vevents(mock_event.icalendar_instance) if "RECURRENCE-ID" in v
-    )
+    exception = next(v for v in _vevents(mock_event.icalendar_instance) if "RECURRENCE-ID" in v)
     assert exception["dtstart"].dt.tzinfo == berlin
     assert exception["recurrence-id"].dt.tzinfo == berlin
 
