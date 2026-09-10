@@ -20,6 +20,7 @@ from .target import (
     DEFAULT_EVENT_DURATION,
     CalendarNotFoundError,
     EventSpec,
+    EventUpdate,
     ReminderMethod,
     SeenEvent,
     all_day_bounds,
@@ -273,6 +274,104 @@ class CalDavCalendarTarget:
             event.save()
             _LOGGER.info("Backfilled a %s reminder onto '%s' (poll)", method, summary)
         return seen
+
+    async def async_delete_event(self, calendar_ref: str, uid: str) -> bool:
+        """Delete the event identified by uid. Returns False if it can't be found."""
+        try:
+            return await self._hass.async_add_executor_job(self._delete_event, calendar_ref, uid)
+        except (CalDavAuthError, CalDavConnectionError):
+            _LOGGER.warning("Could not reach %s to delete an event", calendar_ref)
+            return False
+
+    def _delete_event(self, calendar_ref: str, uid: str) -> bool:
+        client = build_client(self._url, self._username, self._password, self._verify_ssl)
+        calendar = self._find_calendar(client, calendar_ref)
+        if calendar is None:
+            return False
+        try:
+            event = calendar.event_by_uid(uid)
+        except caldav.lib.error.NotFoundError:
+            return False
+        try:
+            event.delete()
+        except caldav.lib.error.DeleteError:
+            _LOGGER.warning("Failed to delete event %s on %s", uid, calendar_ref, exc_info=True)
+            return False
+        return True
+
+    async def async_update_event(self, calendar_ref: str, uid: str, updates: EventUpdate) -> bool:
+        """Apply `updates` to the event identified by uid. Returns False if not found."""
+        try:
+            return await self._hass.async_add_executor_job(
+                self._update_event, calendar_ref, uid, updates
+            )
+        except (CalDavAuthError, CalDavConnectionError):
+            _LOGGER.warning("Could not reach %s to update an event", calendar_ref)
+            return False
+
+    def _update_event(self, calendar_ref: str, uid: str, updates: EventUpdate) -> bool:
+        client = build_client(self._url, self._username, self._password, self._verify_ssl)
+        calendar = self._find_calendar(client, calendar_ref)
+        if calendar is None:
+            return False
+        try:
+            event = calendar.event_by_uid(uid)
+        except caldav.lib.error.NotFoundError:
+            return False
+
+        component = event.icalendar_component
+        if updates.summary is not None:
+            component.pop("summary", None)
+            component.add("summary", updates.summary)
+        if updates.description is not None:
+            component.pop("description", None)
+            component.add("description", updates.description)
+        if updates.location is not None:
+            component.pop("location", None)
+            component.add("location", updates.location)
+        if updates.rrule is not None:
+            component.pop("rrule", None)
+            if updates.rrule:
+                component.add("rrule", icalendar.vRecur.from_ical(updates.rrule))
+
+        if updates.start is not None or updates.end is not None or updates.all_day is not None:
+            existing_start = component["dtstart"].dt
+            existing_end = component["dtend"].dt if "dtend" in component else existing_start
+            all_day = (
+                updates.all_day
+                if updates.all_day is not None
+                else not isinstance(existing_start, datetime)
+            )
+            start = updates.start if updates.start is not None else existing_start
+            end = updates.end if updates.end is not None else existing_end
+            component.pop("dtstart", None)
+            component.pop("dtend", None)
+            if all_day:
+                start_date, end_date = all_day_bounds(start, end)
+                component.add("dtstart", start_date)
+                component.add("dtend", end_date)
+            else:
+                start_utc = as_utc(start)
+                end_utc = as_utc(end) if end is not None else start_utc + DEFAULT_EVENT_DURATION
+                component.add("dtstart", start_utc)
+                component.add("dtend", end_utc)
+
+        if updates.reminders is not None:
+            summary = str(component.get("summary", ""))
+            event_all_day = not isinstance(component["dtstart"].dt, datetime)
+            component.subcomponents = [
+                c for c in component.subcomponents if not isinstance(c, icalendar.Alarm)
+            ]
+            for reminder in updates.reminders:
+                effective_minutes = effective_reminder_minutes(
+                    event_all_day, reminder.minutes_before, reminder.time_of_day
+                )
+                component.add_component(
+                    self._build_alarm(summary, reminder.method, effective_minutes)
+                )
+
+        event.save()
+        return True
 
     def _build_ical(self, spec: EventSpec) -> tuple[str, str]:
         # Plain UUID, no "@calendar-bridge" suffix: the UID also becomes the

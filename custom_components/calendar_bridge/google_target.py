@@ -32,6 +32,7 @@ from .target import (
     DEFAULT_EVENT_DURATION,
     CalendarNotFoundError,
     EventSpec,
+    EventUpdate,
     ReminderMethod,
     SeenEvent,
     all_day_bounds,
@@ -176,6 +177,58 @@ def _reminder_body(method: ReminderMethod, minutes_before: int) -> dict[str, Any
     }
 
 
+def _update_body(updates: EventUpdate, current: GoogleEvent | None) -> dict[str, Any]:
+    """Build a partial PATCH body for the given (non-None) fields of `updates`.
+
+    `current` (the event's present state, fetched by the caller only when
+    needed) resolves the all-day-ness used both to format start/end
+    correctly and to anchor an all-day reminder -- a bare start/end value
+    alone doesn't say whether it belongs in a "date" or "dateTime" field.
+    """
+    body: dict[str, Any] = {}
+    if updates.summary is not None:
+        body["summary"] = updates.summary
+    if updates.description is not None:
+        body["description"] = updates.description
+    if updates.location is not None:
+        body["location"] = updates.location
+    if updates.rrule is not None:
+        body["recurrence"] = [f"RRULE:{updates.rrule}"] if updates.rrule else []
+
+    all_day = updates.all_day
+    if all_day is None and current is not None:
+        all_day = current.start.date_time is None
+
+    if updates.start is not None or updates.end is not None or updates.all_day is not None:
+        assert current is not None
+        start = updates.start if updates.start is not None else current.start.value
+        end = updates.end if updates.end is not None else current.end.value
+        if all_day:
+            start_date, end_date = all_day_bounds(start, end)
+            body["start"] = {"date": start_date.isoformat()}
+            body["end"] = {"date": end_date.isoformat()}
+        else:
+            start_dt = _as_utc_datetime(start)
+            end_dt = _as_utc_datetime(end) if end is not None else start_dt + DEFAULT_EVENT_DURATION
+            body["start"] = {"dateTime": start_dt.isoformat()}
+            body["end"] = {"dateTime": end_dt.isoformat()}
+
+    if updates.reminders is not None:
+        body["reminders"] = {
+            "useDefault": False,
+            "overrides": [
+                {
+                    "method": reminder.method,
+                    "minutes": effective_reminder_minutes(
+                        bool(all_day), reminder.minutes_before, reminder.time_of_day
+                    ),
+                }
+                for reminder in updates.reminders
+            ],
+        }
+    return body
+
+
 class GoogleCalendarTarget:
     """Creates and backfills events on a Google Calendar via `gcal_sync`."""
 
@@ -302,3 +355,62 @@ class GoogleCalendarTarget:
             _LOGGER.warning("Could not reach %s to poll for new events", calendar_ref)
             return None
         return seen
+
+    async def _async_find_event_id(
+        self, calendar_ref: str, auth: AbstractAuth, uid: str
+    ) -> str | None:
+        """Resolve the iCalUID handed back by async_create_event to a Google event id.
+
+        gcal_sync's typed `ListEventsRequest` has no iCalUID field, and the
+        only gcal_sync method that looks up by iCalUID belongs to a separate,
+        local-store-backed sync client that's architecturally incompatible
+        with this backend's stateless design (it resolves the id from a local
+        cache, not the server). The underlying Calendar API's events.list
+        endpoint supports filtering by `iCalUID` directly, though -- a raw
+        request bypassing the typed wrapper, same as `async_create_event`'s
+        `post_json` call already does.
+        """
+        response = await auth.get_json(
+            CALENDAR_EVENTS_URL.format(calendar_id=quote(calendar_ref, safe="")),
+            params={"iCalUID": uid},
+        )
+        items = response.get("items") or []
+        if not items:
+            return None
+        return cast(str, items[0]["id"])
+
+    async def async_delete_event(self, calendar_ref: str, uid: str) -> bool:
+        """Delete the event identified by uid. Returns False if it can't be found."""
+        service, auth = await self._async_service()
+        try:
+            event_id = await self._async_find_event_id(calendar_ref, auth, uid)
+            if event_id is None:
+                return False
+            await service.async_delete_event(calendar_ref, event_id)
+        except ApiException:
+            _LOGGER.warning("Could not delete event %s on %s", uid, calendar_ref, exc_info=True)
+            return False
+        return True
+
+    async def async_update_event(self, calendar_ref: str, uid: str, updates: EventUpdate) -> bool:
+        """Apply `updates` to the event identified by uid. Returns False if not found."""
+        service, auth = await self._async_service()
+        try:
+            event_id = await self._async_find_event_id(calendar_ref, auth, uid)
+            if event_id is None:
+                return False
+            needs_current = (
+                updates.start is not None
+                or updates.end is not None
+                or updates.all_day is not None
+                or updates.reminders is not None
+            )
+            current = (
+                await service.async_get_event(calendar_ref, event_id) if needs_current else None
+            )
+            body = _update_body(updates, current)
+            await service.async_patch_event(calendar_ref, event_id, body)
+        except ApiException:
+            _LOGGER.warning("Could not update event %s on %s", uid, calendar_ref, exc_info=True)
+            return False
+        return True

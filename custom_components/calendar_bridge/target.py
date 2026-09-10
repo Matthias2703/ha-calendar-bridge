@@ -61,6 +61,26 @@ class EventSpec:
     rrule: str | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class EventUpdate:
+    """Fields to change on an existing event; a field left as None is unchanged.
+
+    Distinct from `EventSpec` (which fully describes a new event with real
+    defaults) because `update_event` is a partial patch -- `reminders=()`
+    means "remove every reminder", while `reminders=None` (the default)
+    means "leave the existing reminders alone".
+    """
+
+    summary: str | None = None
+    start: datetime | date | None = None
+    end: datetime | date | None = None
+    all_day: bool | None = None
+    description: str | None = None
+    location: str | None = None
+    reminders: tuple[ReminderSpec, ...] | None = None
+    rrule: str | None = None
+
+
 def as_utc(value: datetime | date) -> datetime | date:
     """Normalize a datetime to UTC; pass dates (all-day events) through unchanged.
 
@@ -175,5 +195,21 @@ class CalendarTarget(Protocol):
         couldn't be found/accessed this poll, so the caller can tell "the
         calendar is genuinely empty" apart from "the lookup failed" and avoid
         persisting a bogus baseline for the latter.
+        """
+        ...
+
+    async def async_delete_event(self, calendar_ref: str, uid: str) -> bool:
+        """Delete the event identified by uid.
+
+        Returns False if no such event was found (or the calendar couldn't
+        be reached), True if it was deleted.
+        """
+        ...
+
+    async def async_update_event(self, calendar_ref: str, uid: str, updates: EventUpdate) -> bool:
+        """Apply `updates` (only its non-None fields) to the event identified by uid.
+
+        Returns False if no such event was found (or the calendar couldn't
+        be reached), True if it was updated.
         """
         ...

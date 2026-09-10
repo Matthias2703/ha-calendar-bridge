@@ -199,6 +199,9 @@
     },
     "calendar_not_found": {
       "message": "Der Kalender für Gerät {device_id} wurde auf dem Server nicht mehr gefunden. Er wurde möglicherweise umbenannt oder gelöscht."
+    },
+    "event_not_found": {
+      "message": "Kein Termin mit der uid {uid} auf diesem Kalender gefunden. Er wurde möglicherweise bereits gelöscht."
     }
   },
   "services": {
@@ -253,6 +256,74 @@
         "notify": {
           "name": "Benachrichtigungs-Erinnerung",
           "description": "Zusätzlich eine Home-Assistant-Benachrichtigung vor dem Termin senden, unabhängig von der Kalender-eigenen Erinnerung. Braucht ein Notify-Ziel und minutes_before; message ist optional und unterstützt die Platzhalter {summary}/{start} (Standard: 'Reminder: {summary}')."
+        }
+      }
+    },
+    "delete_event": {
+      "name": "Termin löschen",
+      "description": "Löscht einen Termin, identifiziert über seine uid, von einem Kalender.",
+      "fields": {
+        "device_id": {
+          "name": "Kalender",
+          "description": "Auf welchem Calendar-Bridge-Kalender sich der Termin befindet. Ohne Angabe wird der konfigurierte Standard-Kalender verwendet."
+        },
+        "uid": {
+          "name": "Termin-UID",
+          "description": "Die uid des Termins, wie von create_event zurückgegeben (das Feld 'created' in dessen Antwort)."
+        }
+      }
+    },
+    "update_event": {
+      "name": "Termin ändern",
+      "description": "Ändert ein oder mehrere Felder eines bestehenden Termins, identifiziert über seine uid. Ausgelassene Felder bleiben unverändert.",
+      "fields": {
+        "device_id": {
+          "name": "Kalender",
+          "description": "Auf welchem Calendar-Bridge-Kalender sich der Termin befindet. Ohne Angabe wird der konfigurierte Standard-Kalender verwendet."
+        },
+        "uid": {
+          "name": "Termin-UID",
+          "description": "Die uid des Termins, wie von create_event zurückgegeben (das Feld 'created' in dessen Antwort)."
+        },
+        "summary": {
+          "name": "Titel",
+          "description": "Neuer Titel des Termins. Bleibt unverändert, wenn nicht angegeben."
+        },
+        "start": {
+          "name": "Beginn",
+          "description": "Neues Start-Datum/-Zeit. Bleibt unverändert, wenn nicht angegeben."
+        },
+        "end": {
+          "name": "Ende",
+          "description": "Neues End-Datum/-Zeit. Bleibt unverändert, wenn nicht angegeben."
+        },
+        "all_day": {
+          "name": "Ganztägig",
+          "description": "Ändert, ob es sich um einen ganztägigen Termin handelt. Bleibt unverändert, wenn nicht angegeben."
+        },
+        "description": {
+          "name": "Beschreibung",
+          "description": "Neue Beschreibung/Notizen zum Termin. Bleibt unverändert, wenn nicht angegeben."
+        },
+        "location": {
+          "name": "Ort",
+          "description": "Neuer Ort des Termins. Bleibt unverändert, wenn nicht angegeben."
+        },
+        "reminder_minutes": {
+          "name": "Erinnerung (Minuten)",
+          "description": "Ersetzt alle bestehenden Erinnerungen durch eine einzelne Popup-Erinnerung so viele Minuten vor dem Termin. Wird ignoriert, falls 'reminders' gesetzt ist. Bleibt unverändert, wenn nicht angegeben."
+        },
+        "reminder_time": {
+          "name": "Erinnerungszeit",
+          "description": "Nur für ganztägige Termine: die Uhrzeit, zu der die Erinnerung ausgelöst wird (Standard 9:00 Uhr). Wird bei Terminen mit Uhrzeit ignoriert."
+        },
+        "reminders": {
+          "name": "Erinnerungen",
+          "description": "Ersetzt alle bestehenden Erinnerungen durch bis zu 5 neue. Eine leere Liste entfernt alle Erinnerungen. Bleibt unverändert, wenn nicht angegeben."
+        },
+        "rrule": {
+          "name": "Wiederholungsregel",
+          "description": "Neue RFC-5545-RRULE, z. B. 'FREQ=YEARLY'. Ein leerer Text entfernt die Wiederholung. Bleibt unverändert, wenn nicht angegeben."
         }
       }
     }

@@ -9,6 +9,7 @@ from datetime import datetime, time, timedelta
 from typing import Any
 
 import voluptuous as vol
+from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import ATTR_DEVICE_ID
 from homeassistant.core import HomeAssistant, ServiceCall, ServiceResponse
 from homeassistant.exceptions import ServiceValidationError
@@ -31,6 +32,7 @@ from .const import (
     ATTR_RRULE,
     ATTR_START,
     ATTR_SUMMARY,
+    ATTR_UID,
     CONF_CALENDAR_URL,
     CONF_DEFAULT_REMINDER_METHOD,
     CONF_DEFAULT_REMINDER_MINUTES,
@@ -44,7 +46,13 @@ from .const import (
 )
 from .device import async_find_default_device, async_resolve_device
 from .reminder_scheduler import ReminderScheduler
-from .target import CalendarNotFoundError, EventSpec, ReminderSpec, render_notify_message
+from .target import (
+    CalendarNotFoundError,
+    EventSpec,
+    EventUpdate,
+    ReminderSpec,
+    render_notify_message,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -87,6 +95,34 @@ CREATE_EVENT_SCHEMA = vol.Schema(
         ),
         vol.Optional(ATTR_RRULE): cv.string,
         vol.Optional(ATTR_NOTIFY): _NOTIFY_SCHEMA,
+    }
+)
+
+DELETE_EVENT_SCHEMA = vol.Schema(
+    {
+        vol.Optional(ATTR_DEVICE_ID): cv.string,
+        vol.Required(ATTR_UID): cv.string,
+    }
+)
+
+UPDATE_EVENT_SCHEMA = vol.Schema(
+    {
+        vol.Optional(ATTR_DEVICE_ID): cv.string,
+        vol.Required(ATTR_UID): cv.string,
+        vol.Optional(ATTR_SUMMARY): cv.string,
+        vol.Optional(ATTR_START): cv.datetime,
+        vol.Optional(ATTR_END): cv.datetime,
+        vol.Optional(ATTR_ALL_DAY): cv.boolean,
+        vol.Optional(ATTR_DESCRIPTION): cv.string,
+        vol.Optional(ATTR_LOCATION): cv.string,
+        vol.Optional(ATTR_REMINDER_MINUTES): vol.All(
+            int, vol.Range(min=MIN_REMINDER_MINUTES, max=MAX_REMINDER_MINUTES)
+        ),
+        vol.Optional(ATTR_REMINDER_TIME): cv.time,
+        vol.Optional(ATTR_REMINDERS): vol.All(
+            cv.ensure_list, [_REMINDER_SCHEMA], vol.Length(max=MAX_REMINDERS)
+        ),
+        vol.Optional(ATTR_RRULE): cv.string,
     }
 )
 
@@ -181,6 +217,73 @@ async def async_handle_create_event(hass: HomeAssistant, call: ServiceCall) -> S
             await _async_schedule_notification(hass, call.data[ATTR_NOTIFY], base_spec)
 
     return {"created": created}
+
+
+def _async_resolve_single_device(
+    hass: HomeAssistant, call_data: Mapping[str, Any]
+) -> tuple[ConfigEntry, str]:
+    """Resolve delete_event/update_event's (optional) device_id to (entry, subentry_id).
+
+    Unlike create_event, these only ever target one calendar -- a UID
+    identifies an event on exactly one calendar, so there's no batch form.
+    """
+    device_id = call_data.get(ATTR_DEVICE_ID)
+    if device_id is None:
+        device_id = async_find_default_device(hass)
+        if device_id is None:
+            raise ServiceValidationError(translation_domain=DOMAIN, translation_key="no_target")
+    resolved = async_resolve_device(hass, device_id)
+    if resolved is None:
+        raise ServiceValidationError(
+            translation_domain=DOMAIN,
+            translation_key="device_not_found",
+            translation_placeholders={"device_id": device_id},
+        )
+    return resolved
+
+
+async def async_handle_delete_event(hass: HomeAssistant, call: ServiceCall) -> ServiceResponse:
+    """Delete one event, identified by its UID, from a calendar."""
+    entry, subentry_id = _async_resolve_single_device(hass, call.data)
+    subentry = entry.subentries[subentry_id]
+    target = entry.runtime_data
+
+    deleted = await target.async_delete_event(subentry.data[CONF_CALENDAR_URL], call.data[ATTR_UID])
+    if not deleted:
+        raise ServiceValidationError(
+            translation_domain=DOMAIN,
+            translation_key="event_not_found",
+            translation_placeholders={"uid": call.data[ATTR_UID]},
+        )
+    return {"deleted": True}
+
+
+async def async_handle_update_event(hass: HomeAssistant, call: ServiceCall) -> ServiceResponse:
+    """Apply the given (only the provided) fields to one existing event."""
+    entry, subentry_id = _async_resolve_single_device(hass, call.data)
+    subentry = entry.subentries[subentry_id]
+    target = entry.runtime_data
+
+    updates = EventUpdate(
+        summary=call.data.get(ATTR_SUMMARY),
+        start=call.data.get(ATTR_START),
+        end=call.data.get(ATTR_END),
+        all_day=call.data.get(ATTR_ALL_DAY),
+        description=call.data.get(ATTR_DESCRIPTION),
+        location=call.data.get(ATTR_LOCATION),
+        reminders=_reminders_from_call(call.data),
+        rrule=call.data.get(ATTR_RRULE),
+    )
+    updated = await target.async_update_event(
+        subentry.data[CONF_CALENDAR_URL], call.data[ATTR_UID], updates
+    )
+    if not updated:
+        raise ServiceValidationError(
+            translation_domain=DOMAIN,
+            translation_key="event_not_found",
+            translation_placeholders={"uid": call.data[ATTR_UID]},
+        )
+    return {"updated": True}
 
 
 async def _async_schedule_notification(

@@ -17,6 +17,7 @@ from custom_components.calendar_bridge.google_target import GoogleCalendarTarget
 from custom_components.calendar_bridge.target import (
     CalendarNotFoundError,
     EventSpec,
+    EventUpdate,
     ReminderSpec,
     SeenEvent,
 )
@@ -77,13 +78,25 @@ class _FakeListEventsResponse:
 
 
 class _FakeService:
-    def __init__(self, events: list[GoogleEvent] | None = None) -> None:
+    def __init__(
+        self, events: list[GoogleEvent] | None = None, get_event: GoogleEvent | None = None
+    ) -> None:
         self.async_list_events = AsyncMock(return_value=_FakeListEventsResponse(events or []))
         self.async_patch_event = AsyncMock()
+        self.async_delete_event = AsyncMock()
+        self.async_get_event = AsyncMock(return_value=get_event)
 
 
 def _patched(target: GoogleCalendarTarget, service: _FakeService, auth: Any = None):
     return patch.object(target, "_async_service", AsyncMock(return_value=(service, auth)))
+
+
+def _auth_finding(event_id: str | None) -> AsyncMock:
+    """A fake auth whose get_json() resolves iCalUID lookups to event_id (or none)."""
+    auth = AsyncMock()
+    items = [{"id": event_id}] if event_id is not None else []
+    auth.get_json = AsyncMock(return_value={"items": items})
+    return auth
 
 
 @pytest.mark.asyncio
@@ -407,3 +420,117 @@ async def test_poll_returns_none_on_api_error():
         )
 
     assert seen is None
+
+
+@pytest.mark.asyncio
+async def test_delete_event_deletes_the_resolved_event_id():
+    target = _make_target()
+    service = _FakeService()
+    auth = _auth_finding("evt1")
+
+    with _patched(target, service, auth):
+        deleted = await target.async_delete_event(_CALENDAR_REF, "uid-1")
+
+    assert deleted is True
+    service.async_delete_event.assert_awaited_once_with(_CALENDAR_REF, "evt1")
+    (url,), kwargs = auth.get_json.call_args
+    assert quote(_CALENDAR_REF, safe="") in url
+    assert kwargs["params"] == {"iCalUID": "uid-1"}
+
+
+@pytest.mark.asyncio
+async def test_delete_event_returns_false_when_uid_not_found():
+    target = _make_target()
+    service = _FakeService()
+    auth = _auth_finding(None)
+
+    with _patched(target, service, auth):
+        deleted = await target.async_delete_event(_CALENDAR_REF, "missing-uid")
+
+    assert deleted is False
+    service.async_delete_event.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_delete_event_returns_false_on_api_error():
+    target = _make_target()
+    service = _FakeService()
+    auth = AsyncMock()
+    auth.get_json.side_effect = ApiException("boom")
+
+    with _patched(target, service, auth):
+        deleted = await target.async_delete_event(_CALENDAR_REF, "uid-1")
+
+    assert deleted is False
+
+
+@pytest.mark.asyncio
+async def test_update_event_returns_false_when_uid_not_found():
+    target = _make_target()
+    service = _FakeService()
+    auth = _auth_finding(None)
+
+    with _patched(target, service, auth):
+        updated = await target.async_update_event(
+            _CALENDAR_REF, "missing-uid", EventUpdate(summary="New")
+        )
+
+    assert updated is False
+    service.async_patch_event.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_update_event_patches_only_the_given_fields():
+    target = _make_target()
+    service = _FakeService()
+    auth = _auth_finding("evt1")
+
+    with _patched(target, service, auth):
+        updated = await target.async_update_event(
+            _CALENDAR_REF, "uid-1", EventUpdate(summary="New title")
+        )
+
+    assert updated is True
+    service.async_patch_event.assert_awaited_once_with(
+        _CALENDAR_REF, "evt1", {"summary": "New title"}
+    )
+    # No start/end/all_day/reminders change requested -- no need to fetch
+    # the event's current state.
+    service.async_get_event.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_update_event_fetches_current_state_to_resolve_all_day_reminders():
+    target = _make_target()
+    current = _google_event("evt1", "Birthday", all_day=True)
+    service = _FakeService(get_event=current)
+    auth = _auth_finding("evt1")
+
+    with _patched(target, service, auth):
+        updated = await target.async_update_event(
+            _CALENDAR_REF,
+            "uid-1",
+            EventUpdate(reminders=(ReminderSpec(minutes_before=30),)),
+        )
+
+    assert updated is True
+    service.async_get_event.assert_awaited_once_with(_CALENDAR_REF, "evt1")
+    body = service.async_patch_event.call_args[0][2]
+    # All-day, so the reminder anchors to 1 day before at 09:00 (900 minutes
+    # before midnight), not a naive 30 minutes before start.
+    assert body["reminders"]["overrides"] == [{"method": "popup", "minutes": 900}]
+
+
+@pytest.mark.asyncio
+async def test_update_event_returns_false_on_api_error():
+    target = _make_target()
+    service = _FakeService()
+    auth = _auth_finding("evt1")
+    service.async_patch_event.side_effect = ApiException("boom")
+
+    with _patched(target, service, auth):
+        updated = await target.async_update_event(
+            _CALENDAR_REF, "uid-1", EventUpdate(summary="New")
+        )
+
+    assert updated is False

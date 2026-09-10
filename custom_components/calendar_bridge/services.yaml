@@ -46,3 +46,60 @@ create_event:
     notify:
       selector:
         object:
+delete_event:
+  fields:
+    device_id:
+      selector:
+        device:
+          filter:
+            integration: calendar_bridge
+    uid:
+      required: true
+      selector:
+        text:
+update_event:
+  fields:
+    device_id:
+      selector:
+        device:
+          filter:
+            integration: calendar_bridge
+    uid:
+      required: true
+      selector:
+        text:
+    summary:
+      selector:
+        text:
+    start:
+      selector:
+        datetime:
+    end:
+      selector:
+        datetime:
+    all_day:
+      selector:
+        boolean:
+    description:
+      selector:
+        text:
+          multiline: true
+    location:
+      selector:
+        text:
+    reminder_minutes:
+      selector:
+        number:
+          min: 0
+          max: 40320
+          mode: box
+          unit_of_measurement: minutes
+    reminder_time:
+      selector:
+        time:
+    reminders:
+      selector:
+        object:
+    rrule:
+      selector:
+        text:

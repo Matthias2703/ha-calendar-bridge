@@ -41,12 +41,21 @@ from .const import (
     DOMAIN,
     REMINDER_METHOD_NONE,
     SERVICE_CREATE_EVENT,
+    SERVICE_DELETE_EVENT,
+    SERVICE_UPDATE_EVENT,
 )
 from .device import async_create_or_update_device
 from .google_target import GoogleCalendarTarget
 from .reminder_scheduler import ReminderScheduler
 from .seen_events import SeenEventsTracker
-from .services import CREATE_EVENT_SCHEMA, async_handle_create_event
+from .services import (
+    CREATE_EVENT_SCHEMA,
+    DELETE_EVENT_SCHEMA,
+    UPDATE_EVENT_SCHEMA,
+    async_handle_create_event,
+    async_handle_delete_event,
+    async_handle_update_event,
+)
 from .target import SeenEvent, render_notify_message
 
 _LOGGER = logging.getLogger(__name__)
@@ -141,6 +150,28 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
         SERVICE_CREATE_EVENT,
         _async_create_event,
         schema=CREATE_EVENT_SCHEMA,
+        supports_response=SupportsResponse.OPTIONAL,
+    )
+
+    async def _async_delete_event(call: ServiceCall) -> ServiceResponse:
+        return await async_handle_delete_event(hass, call)
+
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_DELETE_EVENT,
+        _async_delete_event,
+        schema=DELETE_EVENT_SCHEMA,
+        supports_response=SupportsResponse.OPTIONAL,
+    )
+
+    async def _async_update_event(call: ServiceCall) -> ServiceResponse:
+        return await async_handle_update_event(hass, call)
+
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_UPDATE_EVENT,
+        _async_update_event,
+        schema=UPDATE_EVENT_SCHEMA,
         supports_response=SupportsResponse.OPTIONAL,
     )
 

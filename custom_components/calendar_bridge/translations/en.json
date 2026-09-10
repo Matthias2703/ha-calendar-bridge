@@ -199,6 +199,9 @@
     },
     "calendar_not_found": {
       "message": "The calendar for device {device_id} could no longer be found on the server. It may have been renamed or deleted."
+    },
+    "event_not_found": {
+      "message": "No event with uid {uid} could be found on that calendar. It may have already been deleted."
     }
   },
   "services": {
@@ -253,6 +256,74 @@
         "notify": {
           "name": "Notification reminder",
           "description": "Also send a Home Assistant notification before the event, independent of the calendar's own reminder. Needs a notify target and minutes_before; message is optional and supports {summary}/{start} placeholders (default: 'Reminder: {summary}')."
+        }
+      }
+    },
+    "delete_event": {
+      "name": "Delete event",
+      "description": "Deletes an event, identified by its uid, from a calendar.",
+      "fields": {
+        "device_id": {
+          "name": "Calendar",
+          "description": "Which Calendar Bridge calendar the event is on. Defaults to the configured default target if omitted."
+        },
+        "uid": {
+          "name": "Event UID",
+          "description": "The event's uid, as returned by create_event (the 'created' field in its response)."
+        }
+      }
+    },
+    "update_event": {
+      "name": "Update event",
+      "description": "Changes one or more fields of an existing event, identified by its uid. Fields left out are unchanged.",
+      "fields": {
+        "device_id": {
+          "name": "Calendar",
+          "description": "Which Calendar Bridge calendar the event is on. Defaults to the configured default target if omitted."
+        },
+        "uid": {
+          "name": "Event UID",
+          "description": "The event's uid, as returned by create_event (the 'created' field in its response)."
+        },
+        "summary": {
+          "name": "Summary",
+          "description": "New event title. Left unchanged if omitted."
+        },
+        "start": {
+          "name": "Start",
+          "description": "New start date/time. Left unchanged if omitted."
+        },
+        "end": {
+          "name": "End",
+          "description": "New end date/time. Left unchanged if omitted."
+        },
+        "all_day": {
+          "name": "All day",
+          "description": "Change whether this is an all-day event. Left unchanged if omitted."
+        },
+        "description": {
+          "name": "Description",
+          "description": "New event description/notes. Left unchanged if omitted."
+        },
+        "location": {
+          "name": "Location",
+          "description": "New event location. Left unchanged if omitted."
+        },
+        "reminder_minutes": {
+          "name": "Reminder minutes",
+          "description": "Replaces every existing reminder with a single popup reminder this many minutes before the event. Ignored if 'reminders' is set. Left unchanged if omitted."
+        },
+        "reminder_time": {
+          "name": "Reminder time",
+          "description": "For all-day events only: the time of day the reminder should fire (default 9:00 AM). Ignored for timed events."
+        },
+        "reminders": {
+          "name": "Reminders",
+          "description": "Replaces every existing reminder with up to 5 new ones. Pass an empty list to remove all reminders. Left unchanged if omitted."
+        },
+        "rrule": {
+          "name": "Recurrence rule",
+          "description": "New RFC 5545 RRULE, e.g. 'FREQ=YEARLY'. Pass an empty string to remove recurrence. Left unchanged if omitted."
         }
       }
     }

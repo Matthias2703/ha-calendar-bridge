@@ -14,6 +14,7 @@ from custom_components.calendar_bridge.caldav_target import CalDavCalendarTarget
 from custom_components.calendar_bridge.target import (
     CalendarNotFoundError,
     EventSpec,
+    EventUpdate,
     ReminderSpec,
     SeenEvent,
 )
@@ -621,3 +622,174 @@ async def test_poll_returns_none_on_connection_error():
         )
 
     assert seen is None
+
+
+def _mock_uid_event(summary: str, start: datetime | date, has_alarm: bool = False) -> MagicMock:
+    """A mock CalendarObjectResource as returned by Calendar.event_by_uid()."""
+    component = icalendar.Event()
+    component.add("uid", "evt-uid-1")
+    component.add("summary", summary)
+    component.add("dtstart", start)
+    component.add("dtend", start)
+    if has_alarm:
+        alarm = icalendar.Alarm()
+        alarm.add("action", "DISPLAY")
+        alarm.add("trigger", timedelta(minutes=-30))
+        component.add_component(alarm)
+    mock_event = MagicMock()
+    mock_event.icalendar_component = component
+    return mock_event
+
+
+@pytest.mark.asyncio
+async def test_delete_event_deletes_the_matching_event():
+    target = _make_target()
+    calendar_ref = "https://example.test/cal/"
+    mock_client, mock_calendar = _mock_client_with_calendar(calendar_ref)
+    mock_event = _mock_uid_event("Dentist", datetime(2026, 10, 1, 9, 0, tzinfo=UTC))
+    mock_calendar.event_by_uid.return_value = mock_event
+
+    with patch(
+        "custom_components.calendar_bridge.caldav_target.build_client", return_value=mock_client
+    ):
+        deleted = await target.async_delete_event(calendar_ref, "evt-uid-1")
+
+    assert deleted is True
+    mock_calendar.event_by_uid.assert_called_once_with("evt-uid-1")
+    mock_event.delete.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_delete_event_returns_false_when_uid_not_found():
+    target = _make_target()
+    calendar_ref = "https://example.test/cal/"
+    mock_client, mock_calendar = _mock_client_with_calendar(calendar_ref)
+    mock_calendar.event_by_uid.side_effect = caldav.lib.error.NotFoundError("not found")
+
+    with patch(
+        "custom_components.calendar_bridge.caldav_target.build_client", return_value=mock_client
+    ):
+        deleted = await target.async_delete_event(calendar_ref, "missing-uid")
+
+    assert deleted is False
+
+
+@pytest.mark.asyncio
+async def test_delete_event_returns_false_when_calendar_not_found():
+    target = _make_target()
+    mock_client = MagicMock()
+    mock_client.principal.return_value.calendars.return_value = []
+
+    with patch(
+        "custom_components.calendar_bridge.caldav_target.build_client", return_value=mock_client
+    ):
+        deleted = await target.async_delete_event("https://example.test/cal/", "evt-uid-1")
+
+    assert deleted is False
+
+
+@pytest.mark.asyncio
+async def test_update_event_returns_false_when_uid_not_found():
+    target = _make_target()
+    calendar_ref = "https://example.test/cal/"
+    mock_client, mock_calendar = _mock_client_with_calendar(calendar_ref)
+    mock_calendar.event_by_uid.side_effect = caldav.lib.error.NotFoundError("not found")
+
+    with patch(
+        "custom_components.calendar_bridge.caldav_target.build_client", return_value=mock_client
+    ):
+        updated = await target.async_update_event(
+            calendar_ref, "missing-uid", EventUpdate(summary="New")
+        )
+
+    assert updated is False
+
+
+@pytest.mark.asyncio
+async def test_update_event_changes_only_the_given_fields():
+    target = _make_target()
+    calendar_ref = "https://example.test/cal/"
+    mock_client, mock_calendar = _mock_client_with_calendar(calendar_ref)
+    mock_event = _mock_uid_event("Dentist", datetime(2026, 10, 1, 9, 0, tzinfo=UTC))
+    mock_event.icalendar_component.add("location", "Downtown")
+    mock_calendar.event_by_uid.return_value = mock_event
+
+    with patch(
+        "custom_components.calendar_bridge.caldav_target.build_client", return_value=mock_client
+    ):
+        updated = await target.async_update_event(
+            calendar_ref, "evt-uid-1", EventUpdate(summary="Dentist (rescheduled)")
+        )
+
+    assert updated is True
+    component = mock_event.icalendar_component
+    assert str(component["summary"]) == "Dentist (rescheduled)"
+    # Untouched fields survive the update.
+    assert str(component["location"]) == "Downtown"
+    assert component["dtstart"].dt == datetime(2026, 10, 1, 9, 0, tzinfo=UTC)
+    mock_event.save.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_update_event_changes_start_and_end():
+    target = _make_target()
+    calendar_ref = "https://example.test/cal/"
+    mock_client, mock_calendar = _mock_client_with_calendar(calendar_ref)
+    mock_event = _mock_uid_event("Dentist", datetime(2026, 10, 1, 9, 0, tzinfo=UTC))
+    mock_calendar.event_by_uid.return_value = mock_event
+
+    new_start = datetime(2026, 10, 2, 14, 0, tzinfo=UTC)
+    new_end = datetime(2026, 10, 2, 15, 0, tzinfo=UTC)
+    with patch(
+        "custom_components.calendar_bridge.caldav_target.build_client", return_value=mock_client
+    ):
+        updated = await target.async_update_event(
+            calendar_ref, "evt-uid-1", EventUpdate(start=new_start, end=new_end)
+        )
+
+    assert updated is True
+    component = mock_event.icalendar_component
+    assert component["dtstart"].dt == new_start
+    assert component["dtend"].dt == new_end
+
+
+@pytest.mark.asyncio
+async def test_update_event_replaces_reminders():
+    target = _make_target()
+    calendar_ref = "https://example.test/cal/"
+    mock_client, mock_calendar = _mock_client_with_calendar(calendar_ref)
+    mock_event = _mock_uid_event("Dentist", datetime(2026, 10, 1, 9, 0, tzinfo=UTC), has_alarm=True)
+    mock_calendar.event_by_uid.return_value = mock_event
+
+    with patch(
+        "custom_components.calendar_bridge.caldav_target.build_client", return_value=mock_client
+    ):
+        updated = await target.async_update_event(
+            calendar_ref,
+            "evt-uid-1",
+            EventUpdate(reminders=(ReminderSpec(minutes_before=60),)),
+        )
+
+    assert updated is True
+    alarms = list(mock_event.icalendar_component.walk("VALARM"))
+    assert len(alarms) == 1
+    assert alarms[0]["trigger"].dt.total_seconds() == -60 * 60
+
+
+@pytest.mark.asyncio
+async def test_update_event_empty_reminders_removes_all_alarms():
+    target = _make_target()
+    calendar_ref = "https://example.test/cal/"
+    mock_client, mock_calendar = _mock_client_with_calendar(calendar_ref)
+    mock_event = _mock_uid_event("Dentist", datetime(2026, 10, 1, 9, 0, tzinfo=UTC), has_alarm=True)
+    mock_calendar.event_by_uid.return_value = mock_event
+
+    with patch(
+        "custom_components.calendar_bridge.caldav_target.build_client", return_value=mock_client
+    ):
+        updated = await target.async_update_event(
+            calendar_ref, "evt-uid-1", EventUpdate(reminders=())
+        )
+
+    assert updated is True
+    assert list(mock_event.icalendar_component.walk("VALARM")) == []

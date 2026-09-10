@@ -5,6 +5,8 @@ from __future__ import annotations
 DOMAIN = "calendar_bridge"
 
 SERVICE_CREATE_EVENT = "create_event"
+SERVICE_DELETE_EVENT = "delete_event"
+SERVICE_UPDATE_EVENT = "update_event"
 
 CONF_CALENDAR_URL = "calendar_url"
 CONF_DISPLAY_NAME = "display_name"
@@ -56,6 +58,7 @@ ATTR_RRULE = "rrule"
 ATTR_METHOD = "method"
 ATTR_MINUTES_BEFORE = "minutes_before"
 ATTR_TIME_OF_DAY = "time_of_day"
+ATTR_UID = "uid"
 
 ATTR_NOTIFY = "notify"
 ATTR_NOTIFY_TARGET = "target"
