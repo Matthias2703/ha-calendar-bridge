@@ -1393,3 +1393,25 @@ async def test_update_event_with_occurrence_naive_midnight_datetime_matches_all_
     service.async_patch_event.assert_awaited_once_with(
         _CALENDAR_REF, "master1_20261003", {"summary": "Renamed"}
     )
+
+
+@pytest.mark.asyncio
+async def test_delete_event_with_occurrence_on_a_single_event_does_not_call_instances():
+    # (B2-05) `occurrence` on a genuinely single event (no `recurrence` field
+    # on the resolved master/standalone item) must not even try
+    # events.instances -- that endpoint is documented for recurring events
+    # only, and the id being probed isn't a series master's.
+    target = _make_target()
+    service = _FakeService()
+    auth = AsyncMock()
+    auth.get_json = AsyncMock(return_value={"items": [{"id": "single1"}]})
+
+    with _patched(target, service, auth):
+        deleted = await target.async_delete_event(
+            _CALENDAR_REF, "single-uid", occurrence=datetime(2026, 10, 3, 9, 0, tzinfo=UTC)
+        )
+
+    assert deleted is False
+    service.async_delete_event.assert_not_awaited()
+    for call in auth.get_json.call_args_list:
+        assert "/instances" not in call.args[0]

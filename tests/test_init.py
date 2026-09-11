@@ -121,6 +121,41 @@ async def test_reactive_listener_start_date_time_gives_a_datetime(
 
 
 @pytest.mark.asyncio
+async def test_reactive_listener_date_object_under_start_date_time_is_ignored_not_raised(
+    hass: HomeAssistant, enable_custom_integrations: None
+) -> None:
+    # (B2-03) EVENT_CALL_SERVICE carries the caller's raw, pre-schema-validated
+    # service_data -- a `date` object (not a string, not a `datetime`) under
+    # start_date_time is a type the key doesn't expect. This must be treated
+    # like "no usable start" (skip, no backfill), never raise out of the
+    # listener.
+    mock_target = await _fire_create_event(
+        hass, {"summary": "Birthday", "start_date_time": date(2026, 10, 3)}
+    )
+
+    mock_target.async_backfill_reminder.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_reactive_listener_datetime_object_under_start_date_gives_a_date(
+    hass: HomeAssistant, enable_custom_integrations: None
+) -> None:
+    # (B2-04) A `datetime` object under start_date must still be normalized
+    # to a plain `date` -- `isinstance(x, date)` alone is true for a
+    # `datetime` too (it's a subclass), which would otherwise let a
+    # `datetime` through unchanged under this key.
+    mock_target = await _fire_create_event(
+        hass, {"summary": "Birthday", "start_date": datetime(2026, 10, 3, 0, 0)}
+    )
+
+    mock_target.async_backfill_reminder.assert_awaited()
+    start_arg = mock_target.async_backfill_reminder.call_args_list[-1].args[2]
+    assert isinstance(start_arg, date)
+    assert not isinstance(start_arg, datetime)
+    assert start_arg == date(2026, 10, 3)
+
+
+@pytest.mark.asyncio
 async def test_all_day_event_reminder_anchors_to_time_of_day_not_midnight():
     # A naive "N minutes before start" fire time would land at 23:30 the
     # previous night for a 30-minute reminder on an all-day event -- this
