@@ -23,6 +23,7 @@ from custom_components.calendar_bridge.target import (
     EventUpdate,
     ReminderSpec,
     SeenEvent,
+    series_instance_key,
 )
 
 
@@ -610,6 +611,212 @@ async def test_poll_backfill_does_not_destroy_the_series_rrule():
     master = real_event.icalendar_component
     assert "RRULE" in master
     assert list(master.walk("VALARM"))
+
+
+def _mock_expanded_series_resource(
+    uid: str, occurrences: list[tuple[datetime | date, datetime | date]], summary: str = "Standup"
+) -> MagicMock:
+    """A mock CalendarObjectResource mimicking caldav's client-side expansion.
+
+    `caldav.Calendar.search()`/`expand_rrule()` replace a recurring master
+    with several VEVENT subcomponents in one resource, each stripped of
+    RRULE/RDATE/EXDATE/EXRULE and carrying its own RECURRENCE-ID (verified
+    against caldav 2.1.0's source, see the B1 plan) -- this builds that same
+    shape directly instead of exercising the real expansion. `occurrences` is
+    a list of (recurrence_id, actual_start) pairs so a moved exception's
+    RECURRENCE-ID (its original slot) can differ from its DTSTART (the
+    actual, shifted time).
+    """
+    cal = icalendar.Calendar()
+    for recurrence_id, actual_start in occurrences:
+        component = icalendar.Event()
+        component.add("uid", uid)
+        component.add("summary", summary)
+        component.add("dtstart", actual_start)
+        component.add("recurrence-id", recurrence_id)
+        cal.add_component(component)
+    mock_event = MagicMock()
+    mock_event.icalendar_instance = cal
+    mock_event.icalendar_component = cal.subcomponents[0]
+    return mock_event
+
+
+@pytest.mark.asyncio
+async def test_poll_series_produces_a_seen_event_per_instance():
+    # (g) R3-04: date_search's expanded resource carries 3 VEVENTs, but the
+    # old code only ever reads the first one via `icalendar_component`.
+    target = _make_target()
+    calendar_ref = "https://example.test/cal/"
+    mock_calendar = MagicMock()
+    starts = [
+        datetime(2026, 10, 1, 9, 0, tzinfo=UTC),
+        datetime(2026, 10, 2, 9, 0, tzinfo=UTC),
+        datetime(2026, 10, 3, 9, 0, tzinfo=UTC),
+    ]
+    resource = _mock_expanded_series_resource("series-1", [(s, s) for s in starts])
+    mock_calendar.date_search.return_value = [resource]
+    real_master = _mock_recurring_event("series-1", starts[0])
+    mock_calendar.event_by_uid.return_value = real_master
+
+    seen = await _poll(target, calendar_ref, mock_calendar, known_uids=set())
+
+    assert seen is not None
+    assert len(seen) == 3
+    assert {e.start for e in seen} == set(starts)
+    expected_keys = {series_instance_key("series-1", s) for s in starts}
+    assert {e.uid for e in seen} == expected_keys
+
+
+@pytest.mark.asyncio
+async def test_poll_series_patches_the_master_reminder_exactly_once():
+    # (h) At most one event_by_uid/save() per series per poll, even with 3
+    # instances in the search window; RRULE on the real master survives.
+    target = _make_target()
+    calendar_ref = "https://example.test/cal/"
+    mock_calendar = MagicMock()
+    starts = [
+        datetime(2026, 10, 1, 9, 0, tzinfo=UTC),
+        datetime(2026, 10, 2, 9, 0, tzinfo=UTC),
+        datetime(2026, 10, 3, 9, 0, tzinfo=UTC),
+    ]
+    resource = _mock_expanded_series_resource("series-1", [(s, s) for s in starts])
+    mock_calendar.date_search.return_value = [resource]
+    real_master = _mock_recurring_event("series-1", starts[0])
+    mock_calendar.event_by_uid.return_value = real_master
+
+    seen = await _poll(target, calendar_ref, mock_calendar, known_uids=set())
+
+    assert seen is not None
+    mock_calendar.event_by_uid.assert_called_once_with("series-1")
+    real_master.save.assert_called_once()
+    master = real_master.icalendar_component
+    assert "RRULE" in master
+    assert len(list(master.walk("VALARM"))) == 1
+
+
+@pytest.mark.asyncio
+async def test_poll_series_exception_key_uses_recurrence_id_not_moved_start():
+    # (i) A moved exception's instance key stays anchored to its original
+    # RECURRENCE-ID slot, while its reported start reflects the actual move.
+    target = _make_target()
+    calendar_ref = "https://example.test/cal/"
+    mock_calendar = MagicMock()
+    original = datetime(2026, 10, 2, 9, 0, tzinfo=UTC)
+    moved = datetime(2026, 10, 2, 14, 0, tzinfo=UTC)
+    resource = _mock_expanded_series_resource(
+        "series-1", [(original, moved)], summary="Standup (moved)"
+    )
+    mock_calendar.date_search.return_value = [resource]
+    real_master = _mock_recurring_event("series-1", datetime(2026, 10, 1, 9, 0, tzinfo=UTC))
+    mock_calendar.event_by_uid.return_value = real_master
+
+    seen = await _poll(target, calendar_ref, mock_calendar, known_uids=set())
+
+    assert seen is not None
+    (event,) = seen
+    assert event.uid == series_instance_key("series-1", original)
+    assert event.start == moved
+
+
+@pytest.mark.asyncio
+async def test_poll_single_event_key_is_the_uid():
+    # (j) Regression protection: a non-series event keeps a bare-UID key.
+    target = _make_target()
+    calendar_ref = "https://example.test/cal/"
+    mock_calendar = MagicMock()
+    start = datetime(2026, 11, 2, 8, 30, tzinfo=UTC)
+    event = _mock_caldav_event("Dentist", has_alarm=False, start=start, uid="uid-1")
+    mock_calendar.date_search.return_value = [event]
+    mock_calendar.event_by_uid.return_value = event
+
+    seen = await _poll(target, calendar_ref, mock_calendar, known_uids=set())
+
+    assert seen == {SeenEvent(uid="uid-1", summary="Dentist", start=start)}
+
+
+@pytest.mark.asyncio
+async def test_poll_migrated_series_recognizes_stored_instance_outside_current_window():
+    # (p) The old bare UID plus any persisted per-instance key means the
+    # migration already completed, even when that known instance is no
+    # longer part of the current date_search window.
+    target = _make_target()
+    calendar_ref = "https://example.test/cal/"
+    mock_calendar = MagicMock()
+    uid = "series-1"
+    old_start = datetime(2026, 10, 1, 9, 0, tzinfo=UTC)
+    new_start = datetime(2028, 10, 1, 9, 0, tzinfo=UTC)
+    resource = _mock_expanded_series_resource(uid, [(new_start, new_start)])
+    mock_calendar.date_search.return_value = [resource]
+
+    seen = await _poll(
+        target,
+        calendar_ref,
+        mock_calendar,
+        known_uids={uid, series_instance_key(uid, old_start)},
+    )
+
+    assert seen == {
+        SeenEvent(
+            uid=series_instance_key(uid, new_start),
+            summary="Standup",
+            start=new_start,
+            suppress_notification=False,
+        )
+    }
+    mock_calendar.event_by_uid.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_poll_series_changed_to_single_is_silently_baselined():
+    # (q) A bare UID is unknown after a series first used the B1 instance-key
+    # schema, but its persisted UID# key still proves that this resource was
+    # already known before the RRULE was removed.
+    target = _make_target()
+    calendar_ref = "https://example.test/cal/"
+    mock_calendar = MagicMock()
+    uid = "series-1"
+    old_start = datetime(2026, 10, 1, 9, 0, tzinfo=UTC)
+    single_start = datetime(2026, 10, 2, 9, 0, tzinfo=UTC)
+    event = _mock_caldav_event("Standup", has_alarm=False, start=single_start, uid=uid)
+    mock_calendar.date_search.return_value = [event]
+
+    seen = await _poll(
+        target,
+        calendar_ref,
+        mock_calendar,
+        known_uids={series_instance_key(uid, old_start)},
+    )
+
+    assert seen == {
+        SeenEvent(
+            uid=uid,
+            summary="Standup",
+            start=single_start,
+            suppress_notification=True,
+        )
+    }
+    mock_calendar.event_by_uid.assert_not_called()
+    event.save.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_poll_exception_only_resource_does_not_backfill_reminder():
+    # (r) An exception without its master is still a series instance, but it
+    # is not a safe target for the series-wide native reminder.
+    target = _make_target()
+    calendar_ref = "https://example.test/cal/"
+    mock_calendar = MagicMock()
+    start = datetime(2026, 10, 2, 14, 0, tzinfo=UTC)
+    resource = _mock_expanded_series_resource("series-1", [(start, start)])
+    mock_calendar.date_search.return_value = [resource]
+    mock_calendar.event_by_uid.return_value = resource
+
+    seen = await _poll(target, calendar_ref, mock_calendar, known_uids=set())
+
+    assert seen is not None
+    mock_calendar.event_by_uid.assert_called_once_with("series-1")
+    resource.save.assert_not_called()
+    assert not list(resource.icalendar_component.walk("VALARM"))
 
 
 @pytest.mark.asyncio

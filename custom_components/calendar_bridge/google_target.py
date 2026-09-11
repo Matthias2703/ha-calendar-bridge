@@ -391,6 +391,18 @@ class GoogleCalendarTarget:
         the full rationale -- this is the same design, against a different
         API. Returns `None` (instead of an empty set) if `calendar_ref`
         couldn't be reached this poll.
+
+        `ListEventsRequest` always expands recurring events into individual
+        instances (gcal_sync forces `singleEvents=true`) -- each instance
+        gets its own `SeenEvent` (its `id` is already a stable per-instance
+        key), but its native reminder is only ever backfilled onto the
+        series' *master* (fetched via `recurringEventId`), at most once per
+        master per poll, so patching one instance never turns it into a
+        standalone exception. A master's own `SeenEvent` (`suppress_notification=True`)
+        is also always recorded once per poll, purely as a baseline marker --
+        it never triggers its own HA notification, but lets a later poll's
+        "is this series already known" check (below) see it even before any
+        instance carries an inherited override.
         """
         try:
             service, auth = await self._async_service()
@@ -399,50 +411,108 @@ class GoogleCalendarTarget:
                 calendarId=calendar_ref, timeMin=now - timedelta(days=1), timeMax=now + lookahead
             )
             response = await service.async_list_events(request)
+            events: list[GoogleEvent] = []
+            async for page in response:
+                events.extend(page.items)
+
+            instances_by_master: dict[str, list[GoogleEvent]] = {}
+            for event in events:
+                if event.recurring_event_id:
+                    instances_by_master.setdefault(event.recurring_event_id, []).append(event)
+
             seen: set[SeenEvent] = set()
             default_reminders_empty: bool | None = None
             default_reminders_lookup_attempted = False
-            async for page in response:
-                for event in page.items:
-                    # `event.id` is unique per recurrence instance; the
-                    # `iCalUID` fallback is shared by every instance of one
-                    # recurring series, so preferring it here would make every
-                    # instance after the first look "already seen" forever.
-                    uid = event.id or event.ical_uuid
-                    if not uid:
-                        continue
-                    seen.add(SeenEvent(uid=uid, summary=event.summary, start=event.start.value))
-                    if uid in known_uids or skip_backfill or _has_reminder_override(event):
-                        continue
-                    if _uses_calendar_default_reminders(event):
-                        if not default_reminders_lookup_attempted:
-                            default_reminders_lookup_attempted = True
-                            try:
-                                default_reminders_empty = await _async_default_reminders_are_empty(
-                                    auth, calendar_ref
-                                )
-                            except ApiException:
-                                # Only this event's backfill is skipped -- an
-                                # unrelated lookup failure must not lose the
-                                # rest of this poll's seen-baseline update
-                                # (the outer except below would return None
-                                # for the whole calendar instead).
-                                _LOGGER.warning(
-                                    "Could not check the calendar's default reminders; "
-                                    "skipping this event's backfill"
-                                )
-                        if not default_reminders_empty:
-                            continue
-                    event_all_day = event.start.date_time is None
-                    effective_minutes = effective_reminder_minutes(
-                        event_all_day, minutes_before, None
+            series_reminder_checked: set[str] = set()
+            series_baseline_added: set[str] = set()
+            for event in events:
+                # `event.id` is unique per recurrence instance; the
+                # `iCalUID` fallback is shared by every instance of one
+                # recurring series, so preferring it here would make every
+                # instance after the first look "already seen" forever.
+                uid = event.id or event.ical_uuid
+                if not uid:
+                    continue
+                seen.add(SeenEvent(uid=uid, summary=event.summary, start=event.start.value))
+
+                master_id = event.recurring_event_id
+                if master_id and master_id not in series_baseline_added:
+                    series_baseline_added.add(master_id)
+                    seen.add(
+                        SeenEvent(
+                            uid=master_id,
+                            summary=event.summary,
+                            start=event.start.value,
+                            suppress_notification=True,
+                        )
                     )
-                    await service.async_patch_event(
-                        calendar_ref,
-                        cast(str, event.id),
-                        _reminder_body(method, effective_minutes),
+
+                if uid in known_uids or skip_backfill:
+                    continue
+
+                if master_id:
+                    if _has_reminder_override(event):
+                        continue  # already reflects a prior master patch
+                    sibling_known = any(
+                        (sibling.id or sibling.ical_uuid) in known_uids
+                        for sibling in instances_by_master.get(master_id, [])
                     )
-                    _LOGGER.info("Backfilled a %s reminder onto '%s' (poll)", method, event.summary)
+                    # Known limitation: an existing sparse series whose prior
+                    # instance lies outside this search window has no visible
+                    # sibling to associate with its stored instance id. With
+                    # opt-in backfill enabled, its master can therefore be
+                    # patched once after this upgrade; Package A's typed store
+                    # model is the intended place to preserve that association.
+                    if master_id in known_uids or sibling_known:
+                        # The series (master or some sibling instance) is
+                        # already known -- a daily "nachrueckende" instance
+                        # must never re-trigger the master lookup/patch.
+                        continue
+                    if master_id in series_reminder_checked:
+                        continue
+                    series_reminder_checked.add(master_id)
+                    try:
+                        target_event = await service.async_get_event(calendar_ref, master_id)
+                    except ApiException:
+                        _LOGGER.warning(
+                            "Could not resolve a recurring series' master event; "
+                            "skipping this series' backfill for this poll"
+                        )
+                        continue
+                else:
+                    target_event = event
+
+                if _has_reminder_override(target_event):
+                    continue
+                if _uses_calendar_default_reminders(target_event):
+                    if not default_reminders_lookup_attempted:
+                        default_reminders_lookup_attempted = True
+                        try:
+                            default_reminders_empty = await _async_default_reminders_are_empty(
+                                auth, calendar_ref
+                            )
+                        except ApiException:
+                            # Only this event's backfill is skipped -- an
+                            # unrelated lookup failure must not lose the
+                            # rest of this poll's seen-baseline update
+                            # (the outer except below would return None
+                            # for the whole calendar instead).
+                            _LOGGER.warning(
+                                "Could not check the calendar's default reminders; "
+                                "skipping this event's backfill"
+                            )
+                    if not default_reminders_empty:
+                        continue
+                event_all_day = target_event.start.date_time is None
+                effective_minutes = effective_reminder_minutes(event_all_day, minutes_before, None)
+                await service.async_patch_event(
+                    calendar_ref,
+                    cast(str, target_event.id),
+                    _reminder_body(method, effective_minutes),
+                )
+                _LOGGER.info(
+                    "Backfilled a %s reminder onto '%s' (poll)", method, target_event.summary
+                )
         except ApiException:
             _LOGGER.warning("Could not reach %s to poll for new events", calendar_ref)
             return None

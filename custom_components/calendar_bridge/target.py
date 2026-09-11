@@ -45,6 +45,15 @@ class SeenEvent:
     uid: str
     summary: str
     start: datetime | date
+    # True for a per-poll baseline marker that must never trigger its own HA
+    # notification: a recurring series' master-id entry (both backends, so a
+    # future instance "nachrueckt" without silently bypassing the known-uids
+    # baseline check via the master), or a CalDAV series instance being
+    # migrated from the old bare-UID baseline to per-instance keys (see
+    # `series_instance_key`) on the first poll after this feature ships --
+    # __init__.py's poller can't otherwise tell "new to the baseline, but
+    # deliberately not new to the user" apart from a genuinely new event.
+    suppress_notification: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -111,6 +120,19 @@ def event_starts_match(a: datetime | date, b: datetime | date) -> bool:
     if isinstance(a, datetime) != isinstance(b, datetime):
         return False
     return as_utc(a) == as_utc(b)
+
+
+def series_instance_key(uid: str, recurrence_id: datetime | date) -> str:
+    """Stable per-occurrence key for one instance of a CalDAV recurring series.
+
+    Combines the series-wide UID with its normalized RECURRENCE-ID -- the
+    occurrence's *original* scheduled slot, which stays the same even after
+    the occurrence itself is moved (see `caldav_target.py`'s poll) -- via
+    `as_utc()`, the same normalization `event_starts_match` uses, so a UTC/
+    TZID/floating representation of the same instant always produces an
+    identical key.
+    """
+    return f"{uid}#{as_utc(recurrence_id).isoformat()}"
 
 
 def effective_reminder_minutes(all_day: bool, minutes_before: int, time_of_day: time | None) -> int:

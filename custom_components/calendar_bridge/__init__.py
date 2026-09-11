@@ -327,7 +327,13 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
                 if notify is not None and not is_first_poll:
                     notify_target, notify_minutes_before, notify_message_template = notify
                     for seen in found:
-                        if seen.uid in known_before:
+                        # `suppress_notification` covers what a plain
+                        # known-uids check can't: a series' master-id
+                        # baseline entry, or a CalDAV series being migrated
+                        # to per-instance keys -- both must join the
+                        # baseline above without notifying (see
+                        # `SeenEvent`/B1).
+                        if seen.uid in known_before or seen.suppress_notification:
                             continue
                         await _async_schedule_ha_notification(
                             scheduler,

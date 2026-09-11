@@ -29,6 +29,7 @@ from .target import (
     as_utc,
     effective_reminder_minutes,
     event_starts_match,
+    series_instance_key,
 )
 
 if TYPE_CHECKING:
@@ -326,6 +327,24 @@ class CalDavCalendarTarget:
         lookahead: timedelta,
         skip_backfill: bool,
     ) -> set[SeenEvent] | None:
+        """Poll for events not seen before, keyed per-occurrence for a series.
+
+        `date_search()` client-side expands a recurring master into several
+        VEVENT components inside one returned resource, each carrying its
+        own RECURRENCE-ID (see the B1 plan) -- every one of them becomes its
+        own `SeenEvent`, keyed via `series_instance_key` so a whole series
+        doesn't collapse into a single notification (R3-04). The native
+        VALARM, however, is still only ever backfilled onto the series'
+        real master (re-fetched via `event_by_uid`, same as before), at most
+        once per UID per poll.
+
+        A series whose old bare-UID baseline predates this per-instance
+        keying (no persisted instance key of it known yet, but the UID itself is)
+        migrates silently: this poll's instances become the new baseline
+        (`suppress_notification=True`, no backfill) without notifying for
+        events the user has already seen under the old scheme -- a later
+        poll's genuinely new instance is then detected normally.
+        """
         client = build_client(self._url, self._username, self._password, self._verify_ssl)
         calendar = self._find_calendar(client, calendar_ref)
         if calendar is None:
@@ -333,42 +352,78 @@ class CalDavCalendarTarget:
 
         now = datetime.now(UTC)
         events = calendar.date_search(now - timedelta(days=1), now + lookahead)
-        seen: set[SeenEvent] = set()
+
+        instances_by_uid: dict[str, list[icalendar.Event]] = {}
         for event in events:
-            component = event.icalendar_component
-            uid = str(component.get("uid", ""))
-            if not uid:
-                continue
-            summary = str(component.get("summary", ""))
-            dtstart = component.get("dtstart")
-            start = dtstart.dt if dtstart is not None else now
-            seen.add(SeenEvent(uid=uid, summary=summary, start=start))
-            if uid in known_uids or skip_backfill:
-                continue
-            # Re-fetch the real, unexpanded event before mutating/saving --
-            # see `_backfill_reminder` for why `date_search`'s own (expanded)
-            # result object must never be saved back.
-            try:
-                real_event = calendar.event_by_uid(uid)
-            except caldav.lib.error.NotFoundError:
-                continue
-            instance_calendar = real_event.icalendar_instance
-            master = (
-                self._find_master_component(instance_calendar) or real_event.icalendar_component
-            )
-            if list(master.walk("VALARM")):
-                continue  # already has a reminder
-            event_all_day = not isinstance(master["dtstart"].dt, datetime)
-            effective_minutes = effective_reminder_minutes(event_all_day, minutes_before, None)
-            master.add_component(self._build_alarm(summary, method, effective_minutes))
-            try:
-                real_event.save()
-            except caldav.lib.error.PutError:
-                _LOGGER.warning(
-                    "Failed to save a backfilled reminder onto '%s' (poll)", summary, exc_info=True
+            for component in event.icalendar_instance.walk("VEVENT"):
+                uid = str(component.get("uid", ""))
+                if uid:
+                    instances_by_uid.setdefault(uid, []).append(component)
+
+        seen: set[SeenEvent] = set()
+        reminder_checked_uids: set[str] = set()
+        for uid, components in instances_by_uid.items():
+            instance_keys = [
+                series_instance_key(uid, component["recurrence-id"].dt)
+                if "recurrence-id" in component
+                else uid
+                for component in components
+            ]
+            uid_known = uid in known_uids
+            any_instance_known = any(key.startswith(f"{uid}#") for key in known_uids)
+            migrating = uid_known and not any_instance_known
+            series_already_known = uid_known or any_instance_known
+
+            for component, key in zip(components, instance_keys, strict=True):
+                summary = str(component.get("summary", ""))
+                dtstart = component.get("dtstart")
+                start = dtstart.dt if dtstart is not None else now
+                seen.add(
+                    SeenEvent(
+                        uid=key,
+                        summary=summary,
+                        start=start,
+                        suppress_notification=(
+                            migrating or (key == uid and not uid_known and any_instance_known)
+                        ),
+                    )
                 )
-                continue
-            _LOGGER.info("Backfilled a %s reminder onto '%s' (poll)", method, summary)
+
+                if series_already_known or skip_backfill:
+                    continue
+                if uid in reminder_checked_uids:
+                    continue
+                reminder_checked_uids.add(uid)
+
+                # Re-fetch the real, unexpanded event before mutating/saving
+                # -- see `_backfill_reminder` for why `date_search`'s own
+                # (expanded) result object must never be saved back.
+                try:
+                    real_event = calendar.event_by_uid(uid)
+                except caldav.lib.error.NotFoundError:
+                    continue
+                instance_calendar = real_event.icalendar_instance
+                master = self._find_master_component(instance_calendar)
+                if master is None:
+                    component = real_event.icalendar_component
+                    if "recurrence-id" in component:
+                        continue
+                    master = component
+                if list(master.walk("VALARM")):
+                    continue  # already has a reminder
+                event_all_day = not isinstance(master["dtstart"].dt, datetime)
+                effective_minutes = effective_reminder_minutes(event_all_day, minutes_before, None)
+                master.add_component(self._build_alarm(summary, method, effective_minutes))
+                try:
+                    real_event.save()
+                except caldav.lib.error.PutError:
+                    _LOGGER.warning(
+                        "Failed to save a backfilled reminder onto '%s' (poll)",
+                        summary,
+                        exc_info=True,
+                    )
+                    continue
+                _LOGGER.info("Backfilled a %s reminder onto '%s' (poll)", method, summary)
         return seen
 
     async def async_delete_event(
