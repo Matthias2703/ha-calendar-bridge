@@ -46,6 +46,7 @@ def _google_event(
     ical_uuid: str | None = None,
     has_reminder: bool = False,
     use_default_reminder: bool = False,
+    explicit_no_reminder: bool = False,
     all_day: bool = False,
     start_dt: datetime | date | None = None,
     recurring_event_id: str | None = None,
@@ -66,6 +67,11 @@ def _google_event(
         reminders = Reminders(useDefault=False, overrides=[{"method": "popup", "minutes": 30}])
     elif use_default_reminder:
         reminders = Reminders(useDefault=True, overrides=[])
+    elif explicit_no_reminder:
+        # useDefault=false with an empty overrides list: an explicit "no
+        # reminder at all", distinct from useDefault=true/missing (which
+        # defers to the calendar's own default reminders).
+        reminders = Reminders(useDefault=False, overrides=[])
     else:
         reminders = None
     return GoogleEvent(
@@ -907,3 +913,40 @@ async def test_poll_default_reminders_lookup_failure_skips_only_that_events_patc
     assert seen is not None
     assert {e.uid for e in seen} == {"evt1"}
     service.async_patch_event.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_backfill_reminder_explicit_no_reminder_is_patched_without_checking_calendar_defaults():
+    # useDefault=false with an empty overrides list is an explicit "no
+    # reminder at all" -- it must be treated as patchable on its own, without
+    # ever consulting the calendar's default reminders (even non-empty ones).
+    target = _make_target()
+    start = datetime(2026, 10, 1, 10, 0, tzinfo=UTC)
+    event = _google_event("evt1", "Arzt", start_dt=start, explicit_no_reminder=True)
+    service = _FakeService([event])
+    auth = _auth_default_reminders([{"method": "popup", "minutes": 10}])
+
+    with _patched(target, service, auth):
+        patched = await target.async_backfill_reminder(_CALENDAR_REF, "Arzt", start, 30, "popup")
+
+    assert patched is True
+    service.async_patch_event.assert_awaited_once()
+    auth.get_json.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_poll_explicit_no_reminder_is_patched_without_checking_calendar_defaults():
+    target = _make_target()
+    event = _google_event("evt1", "Arzt", ical_uuid="uid-1", explicit_no_reminder=True)
+    service = _FakeService([event])
+    auth = _auth_default_reminders([{"method": "popup", "minutes": 10}])
+
+    with _patched(target, service, auth):
+        seen = await target.async_backfill_new_events(
+            _CALENDAR_REF, set(), 30, "popup", _LOOKAHEAD, False
+        )
+
+    assert seen is not None
+    assert {e.uid for e in seen} == {"evt1"}
+    service.async_patch_event.assert_awaited_once()
+    auth.get_json.assert_not_called()
