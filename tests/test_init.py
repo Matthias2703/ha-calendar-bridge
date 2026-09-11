@@ -1,4 +1,4 @@
-"""Tests for the HA-native notification scheduling helper in __init__.py."""
+"""Tests for the HA-native notification scheduling paths in __init__.py."""
 
 from __future__ import annotations
 
@@ -20,7 +20,6 @@ from homeassistant.core import HomeAssistant
 from homeassistant.util import dt as dt_util
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
-from custom_components.calendar_bridge import _async_schedule_ha_notification
 from custom_components.calendar_bridge.const import (
     CONF_CALENDAR_URL,
     CONF_DEFAULT_REMINDER_METHOD,
@@ -29,6 +28,8 @@ from custom_components.calendar_bridge.const import (
     DOMAIN,
     REMINDER_METHOD_POPUP,
 )
+from custom_components.calendar_bridge.reminder_scheduler import ReminderScheduler
+from custom_components.calendar_bridge.target import SeenEvent, render_notify_message
 
 _CAL1 = "https://caldav.example.test/cal1"
 
@@ -156,50 +157,92 @@ async def test_reactive_listener_datetime_object_under_start_date_gives_a_date(
     assert start_arg == date(2026, 10, 3)
 
 
+def _make_scheduler() -> ReminderScheduler:
+    hass = MagicMock()
+    # `_ReminderStore` (the actual class `ReminderScheduler.__init__`
+    # instantiates) must be patched, not the plain `Store` name it
+    # subclasses -- the subclass is bound to the real base at definition
+    # time, so patching `Store` alone has no effect here.
+    with patch(
+        "custom_components.calendar_bridge.reminder_scheduler._ReminderStore"
+    ) as mock_store_cls:
+        mock_store = mock_store_cls.return_value
+        mock_store.async_load = AsyncMock(return_value={"reminders": []})
+        mock_store.async_save = AsyncMock()
+        scheduler = ReminderScheduler(hass)
+    return scheduler
+
+
+async def _reconcile_one(
+    scheduler: ReminderScheduler,
+    target: str,
+    minutes_before: int,
+    summary: str,
+    start,
+    *,
+    message_template: str | None = None,
+) -> dict:
+    """Run `async_reconcile_calendar` for one real event and return its stored entry.
+
+    This is Paket A1's production call site for a calendar-sourced
+    notification (`__init__.py`'s poller) -- the old, now-deleted
+    `_async_schedule_ha_notification` helper this file used to exercise
+    directly was folded into `ReminderScheduler.async_reconcile_calendar`.
+    """
+    seen = SeenEvent(
+        uid="uid-1", summary=summary, start=start, instance_key="uid-1", series_uid="uid-1"
+    )
+    with patch("custom_components.calendar_bridge.reminder_scheduler.async_track_point_in_time"):
+        await scheduler.async_reconcile_calendar(
+            "entry-1",
+            "sub-1",
+            (target, minutes_before, message_template),
+            [seen],
+            timedelta(days=365),
+            render_notify_message,
+        )
+    return scheduler._data["reminders"][0]
+
+
 @pytest.mark.asyncio
-async def test_all_day_event_reminder_anchors_to_time_of_day_not_midnight():
+async def test_all_day_event_reminder_anchors_to_time_of_day_not_midnight(freezer):
     # A naive "N minutes before start" fire time would land at 23:30 the
     # previous night for a 30-minute reminder on an all-day event -- this
     # independent (HA-native) notification path must route through
     # effective_reminder_minutes just like the calendar-native VALARM path.
-    scheduler = MagicMock()
-    scheduler.async_schedule = AsyncMock()
+    # Within the 48h planning window of the computed fire_at (Oct 4 09:00Z).
+    freezer.move_to(datetime(2026, 10, 3, tzinfo=UTC))
+    scheduler = _make_scheduler()
 
-    await _async_schedule_ha_notification(
-        scheduler, "entry-1", "notify.phone", 30, "Birthday", date(2026, 10, 5)
-    )
+    reminder = await _reconcile_one(scheduler, "notify.phone", 30, "Birthday", date(2026, 10, 5))
 
-    scheduler.async_schedule.assert_awaited_once()
-    _target, fire_at, _message, entry_id = scheduler.async_schedule.call_args[0]
     # 1 day before, at 09:00 == 15 hours before midnight of the start date.
-    assert fire_at == datetime(2026, 10, 4, 9, 0, tzinfo=UTC)
-    assert entry_id == "entry-1"
+    assert dt_util.parse_datetime(reminder["fire_at"]) == datetime(2026, 10, 4, 9, 0, tzinfo=UTC)
+    assert reminder["entry_id"] == "entry-1"
 
 
 @pytest.mark.asyncio
-async def test_timed_event_reminder_is_unaffected():
-    scheduler = MagicMock()
-    scheduler.async_schedule = AsyncMock()
+async def test_timed_event_reminder_is_unaffected(freezer):
+    # Within the 48h planning window of the computed fire_at (Oct 5 13:30Z).
+    freezer.move_to(datetime(2026, 10, 4, tzinfo=UTC))
+    scheduler = _make_scheduler()
     start = datetime(2026, 10, 5, 14, 0, tzinfo=UTC)
 
-    await _async_schedule_ha_notification(
-        scheduler, "entry-1", "notify.phone", 30, "Dentist", start
-    )
+    reminder = await _reconcile_one(scheduler, "notify.phone", 30, "Dentist", start)
 
-    fire_at = scheduler.async_schedule.call_args[0][1]
-    assert fire_at == start - timedelta(minutes=30)
+    assert dt_util.parse_datetime(reminder["fire_at"]) == start - timedelta(minutes=30)
 
 
 @pytest.mark.asyncio
-async def test_a_malformed_message_template_does_not_prevent_scheduling():
+async def test_a_malformed_message_template_does_not_prevent_scheduling(freezer):
     # render_notify_message() itself never raises, but this is still guarded
     # by its own try/except -- a total failure here must not break the poll.
-    scheduler = MagicMock()
-    scheduler.async_schedule = AsyncMock()
+    # Within the 48h planning window of the computed fire_at (Oct 5 13:30Z).
+    freezer.move_to(datetime(2026, 10, 4, tzinfo=UTC))
+    scheduler = _make_scheduler()
 
-    await _async_schedule_ha_notification(
+    reminder = await _reconcile_one(
         scheduler,
-        "entry-1",
         "notify.phone",
         30,
         "Dentist",
@@ -207,9 +250,7 @@ async def test_a_malformed_message_template_does_not_prevent_scheduling():
         message_template="{summary} at {start.nonexistent_attr}",
     )
 
-    scheduler.async_schedule.assert_awaited_once()
-    message = scheduler.async_schedule.call_args[0][2]
-    assert message == "Reminder: Dentist"
+    assert reminder["message"] == "Reminder: Dentist"
 
 
 @pytest.fixture
@@ -221,19 +262,19 @@ def europe_berlin_timezone():
 
 
 @pytest.mark.asyncio
-async def test_all_day_notification_survives_dst_spring_forward(europe_berlin_timezone):
-    # (j) Paket C, poller path (this is the only production call site of
-    # _async_schedule_ha_notification): a 2-nominal-day lead time crossing
-    # the 2026-03-29 spring-forward must still fire at 09:00 *local* on
-    # 2026-03-28 (08:00Z) -- computing calendar-first (date minus days,
-    # then anchor, then convert once) instead of midnight-then-subtract
-    # (which gave 07:00Z, one hour off).
-    scheduler = MagicMock()
-    scheduler.async_schedule = AsyncMock()
+async def test_all_day_notification_survives_dst_spring_forward(europe_berlin_timezone, freezer):
+    # (j) Paket C, poller path (`ReminderScheduler.async_reconcile_calendar`
+    # is the production call site for a calendar-sourced notification): a
+    # 2-nominal-day lead time crossing the 2026-03-29 spring-forward must
+    # still fire at 09:00 *local* on 2026-03-28 (08:00Z) -- computing
+    # calendar-first (date minus days, then anchor, then convert once)
+    # instead of midnight-then-subtract (which gave 07:00Z, one hour off).
+    # Within the 48h planning window of the computed fire_at (Mar 28 08:00Z).
+    freezer.move_to(datetime(2026, 3, 27, tzinfo=UTC))
+    scheduler = _make_scheduler()
 
-    await _async_schedule_ha_notification(
-        scheduler, "entry-1", "notify.phone", 1441, "Geburtstag", date(2026, 3, 30)
+    reminder = await _reconcile_one(
+        scheduler, "notify.phone", 1441, "Geburtstag", date(2026, 3, 30)
     )
 
-    fire_at = scheduler.async_schedule.call_args[0][1]
-    assert fire_at == datetime(2026, 3, 28, 8, 0, tzinfo=UTC)
+    assert dt_util.parse_datetime(reminder["fire_at"]) == datetime(2026, 3, 28, 8, 0, tzinfo=UTC)

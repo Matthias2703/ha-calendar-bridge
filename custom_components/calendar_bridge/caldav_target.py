@@ -376,11 +376,12 @@ class CalDavCalendarTarget:
         once per UID per poll.
 
         A series whose old bare-UID baseline predates this per-instance
-        keying (no persisted instance key of it known yet, but the UID itself is)
-        migrates silently: this poll's instances become the new baseline
-        (`suppress_notification=True`, no backfill) without notifying for
-        events the user has already seen under the old scheme -- a later
-        poll's genuinely new instance is then detected normally.
+        keying (no persisted instance key of it known yet, but the UID itself
+        is) migrates silently into the baseline without a backfill (still
+        gated by `series_already_known` below) -- but Paket A1 notifies for
+        its real, currently-upcoming instances like any other real event
+        (decision C: migrating is a backfill-only concept, never a reason to
+        withhold a notification).
         """
         client = build_client(self._url, self._username, self._password, self._verify_ssl)
         calendar = self._find_calendar(client, calendar_ref)
@@ -408,21 +409,24 @@ class CalDavCalendarTarget:
             ]
             uid_known = uid in known_uids
             any_instance_known = any(key.startswith(f"{uid}#") for key in known_uids)
-            migrating = uid_known and not any_instance_known
             series_already_known = uid_known or any_instance_known
 
             for component, key in zip(components, instance_keys, strict=True):
                 summary = str(component.get("summary", ""))
                 dtstart = component.get("dtstart")
                 start = dtstart.dt if dtstart is not None else now
+                # `key` already is the Paket A1 cross-backend instance
+                # identity (series_instance_key(uid, recurrence-id), or the
+                # bare uid for a single event) -- no separate instance_key
+                # needed. Never a marker: every SeenEvent here corresponds
+                # to a real, returned VEVENT component.
                 seen.add(
                     SeenEvent(
                         uid=key,
                         summary=summary,
                         start=start,
-                        suppress_notification=(
-                            migrating or (key == uid and not uid_known and any_instance_known)
-                        ),
+                        instance_key=key,
+                        series_uid=uid,
                     )
                 )
 

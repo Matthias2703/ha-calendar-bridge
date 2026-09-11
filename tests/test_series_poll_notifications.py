@@ -1,14 +1,21 @@
-"""B1: orchestration tests for series-aware polling and notification scheduling.
+"""B1/A1: orchestration tests for series-aware polling and notification scheduling.
 
 Uses the real hass fixture (explicit enable_custom_integrations, not autouse)
 because the behavior spans config-entry setup, the periodic poller, the
 persisted seen-events baseline, and the reminder scheduler -- the same style
 as `test_backfill_opt_in.py`.
+
+Paket A1 replaced the old "only genuinely new events get a notification,
+migrating/known events are suppressed" model with: every real (non-marker)
+upcoming event gets notified, gated only by the 48h planning window
+(decision 1, decision 2, decision C) -- these tests assert that model
+directly against `scheduler._data["reminders"]`, since the old
+`scheduler.async_schedule` spy point no longer exists.
 """
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import icalendar
@@ -90,15 +97,19 @@ async def _fire_poll(hass: HomeAssistant, freezer, anchor: datetime, offset_seco
     await hass.async_block_till_done(wait_background_tasks=True)
 
 
+def _calendar_entries(scheduler: object) -> list[dict]:
+    return [r for r in scheduler._data["reminders"] if r["source"] == "calendar"]  # type: ignore[attr-defined]
+
+
 @pytest.mark.asyncio
-async def test_k_caldav_series_migration_suppresses_notifications_until_next_poll(
+async def test_k_caldav_migrating_series_still_gets_notified(
     hass: HomeAssistant, enable_custom_integrations: None, freezer, hass_storage: dict
 ) -> None:
-    # Point 3: a pre-existing baseline stores the series' old bare UID. The
-    # first poll after the B1 upgrade must plan 0 notifications and 0
-    # backfill for it (migration); a later, genuinely new instance must then
-    # get exactly 1 notification. CalDAV client is mocked, not the target,
-    # so the real CalDavCalendarTarget.async_backfill_new_events runs.
+    # Decision C: a series whose UID predates per-instance keying (a
+    # "migrating" series in the backfill sense, recognized via the
+    # pre-existing bare-UID baseline) must still get an HA notification for
+    # each of its real, currently-upcoming instances -- migration is a
+    # backfill-only concept and never a reason to withhold a notification.
     hass_storage[_SEEN_EVENTS_STORAGE_KEY] = {
         "version": 1,
         "data": {_CAL1: ["series-1"]},
@@ -110,17 +121,13 @@ async def test_k_caldav_series_migration_suppresses_notifications_until_next_pol
     await hass.async_block_till_done()
 
     scheduler = hass.data[DOMAIN]["reminder_scheduler"]
-    scheduler.async_schedule = AsyncMock()
 
     mock_calendar = MagicMock()
     mock_client = _mock_client_for(_CAL1, mock_calendar)
 
-    day1, day2, day3, day4 = (
-        datetime(2026, 10, 1, 9, 0, tzinfo=UTC),
-        datetime(2026, 10, 2, 9, 0, tzinfo=UTC),
-        datetime(2026, 10, 3, 9, 0, tzinfo=UTC),
-        datetime(2026, 10, 4, 9, 0, tzinfo=UTC),
-    )
+    anchor = _poll_anchor()
+    instance1 = anchor + timedelta(hours=1)
+    instance2 = anchor + timedelta(hours=30)
 
     def _resource(starts: list[datetime]) -> MagicMock:
         cal = icalendar.Calendar()
@@ -136,28 +143,27 @@ async def test_k_caldav_series_migration_suppresses_notifications_until_next_pol
         mock_event.icalendar_component = cal.subcomponents[0]
         return mock_event
 
-    mock_calendar.date_search.side_effect = [
-        [_resource([day1, day2, day3])],
-        [_resource([day2, day3, day4])],
-    ]
+    mock_calendar.date_search.return_value = [_resource([instance1, instance2])]
 
-    anchor = _poll_anchor()
     with patch(
         "custom_components.calendar_bridge.caldav_target.build_client", return_value=mock_client
     ):
         await _fire_poll(hass, freezer, anchor, 60)
-        assert scheduler.async_schedule.call_count == 0
 
-        await _fire_poll(hass, freezer, anchor, 120)
-        assert scheduler.async_schedule.call_count == 1
+    calendar_entries = _calendar_entries(scheduler)
+    assert len(calendar_entries) == 2
+    assert {r["series_uid"] for r in calendar_entries} == {"series-1"}
+    assert all(not r["sent"] for r in calendar_entries)
 
 
 @pytest.mark.asyncio
-async def test_l_caldav_single_event_with_old_uid_is_not_treated_as_migrating(
+async def test_l_caldav_event_beyond_planning_window_is_not_yet_stored(
     hass: HomeAssistant, enable_custom_integrations: None, freezer, hass_storage: dict
 ) -> None:
-    # A plain (non-series) event whose UID is already the baseline must never
-    # trigger migration handling -- it's just an already-known event.
+    # Decision 2/D: a real (already-known) event whose fire time is still
+    # more than 48h out is not planned/stored yet -- every poll
+    # re-evaluates, so it appears the moment it comes within the window,
+    # without needing to look "new" to the seen-UID baseline.
     hass_storage[_SEEN_EVENTS_STORAGE_KEY] = {
         "version": 1,
         "data": {_CAL1: ["single-1"]},
@@ -169,63 +175,91 @@ async def test_l_caldav_single_event_with_old_uid_is_not_treated_as_migrating(
     await hass.async_block_till_done()
 
     scheduler = hass.data[DOMAIN]["reminder_scheduler"]
-    scheduler.async_schedule = AsyncMock()
 
     mock_calendar = MagicMock()
     mock_client = _mock_client_for(_CAL1, mock_calendar)
 
-    component = icalendar.Event()
-    component.add("uid", "single-1")
-    component.add("summary", "Dentist")
-    component.add("dtstart", datetime(2026, 10, 1, 9, 0, tzinfo=UTC))
-    cal = icalendar.Calendar()
-    cal.add_component(component)
-    mock_event = MagicMock()
-    mock_event.icalendar_instance = cal
-    mock_event.icalendar_component = component
-    mock_calendar.date_search.return_value = [mock_event]
+    anchor = _poll_anchor()
+    far_start = anchor + timedelta(days=10)
+
+    def _resource(start: datetime) -> MagicMock:
+        component = icalendar.Event()
+        component.add("uid", "single-1")
+        component.add("summary", "Dentist")
+        component.add("dtstart", start)
+        cal = icalendar.Calendar()
+        cal.add_component(component)
+        mock_event = MagicMock()
+        mock_event.icalendar_instance = cal
+        mock_event.icalendar_component = component
+        return mock_event
+
+    mock_calendar.date_search.return_value = [_resource(far_start)]
 
     with patch(
         "custom_components.calendar_bridge.caldav_target.build_client", return_value=mock_client
     ):
-        await _fire_poll(hass, freezer, _poll_anchor(), 60)
+        await _fire_poll(hass, freezer, anchor, 60)
+        assert _calendar_entries(scheduler) == []
 
-    assert scheduler.async_schedule.call_count == 0
+        # Move the event to within the 48h window (e.g. it got rescheduled)
+        # and poll again -- it must now be planned.
+        near_start = anchor + timedelta(hours=1)
+        mock_calendar.date_search.return_value = [_resource(near_start)]
+        await _fire_poll(hass, freezer, anchor, 120)
+
+    calendar_entries = _calendar_entries(scheduler)
+    assert len(calendar_entries) == 1
+    assert calendar_entries[0]["series_uid"] == "single-1"
 
 
 @pytest.mark.asyncio
-async def test_o_google_series_notifies_once_per_instance_never_for_the_master(
+async def test_o_google_series_notifies_each_instance_never_the_marker(
     hass: HomeAssistant, enable_custom_integrations: None, freezer
 ) -> None:
-    # Point 2: each of a new Google series' instances is its own SeenEvent
-    # (own notification); the master's own suppressed baseline entry (point 4
-    # addendum) must never itself trigger a notification.
+    # Decision C: each of a series' real instances gets its own stored
+    # notification; the series-master baseline marker (`is_marker=True`)
+    # must never itself produce one. Decision 5: reconciliation is not
+    # gated by `is_first_poll` -- a single poll is enough.
     entry = _make_caldav_entry_with_notify()
     entry.add_to_hass(hass)
     assert await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()
 
-    mock_target = AsyncMock()
+    scheduler = hass.data[DOMAIN]["reminder_scheduler"]
+
+    anchor = _poll_anchor()
     starts = [
-        datetime(2026, 10, 1, 9, 0, tzinfo=UTC),
-        datetime(2026, 10, 2, 9, 0, tzinfo=UTC),
-        datetime(2026, 10, 3, 9, 0, tzinfo=UTC),
+        anchor + timedelta(hours=1),
+        anchor + timedelta(hours=2),
+        anchor + timedelta(hours=3),
     ]
     found = {
-        SeenEvent(uid=f"evt{i}", summary="Standup", start=s) for i, s in enumerate(starts, start=1)
-    } | {SeenEvent(uid="M", summary="Standup", start=starts[0], suppress_notification=True)}
-    mock_target.async_backfill_new_events = AsyncMock(return_value=set())
+        SeenEvent(
+            uid=f"evt{i}#{s.isoformat()}",
+            summary="Standup",
+            start=s,
+            instance_key=f"series-1#{s.isoformat()}",
+            series_uid="series-1",
+        )
+        for i, s in enumerate(starts, start=1)
+    } | {
+        SeenEvent(
+            uid="series-1",
+            summary="Standup",
+            start=starts[0],
+            instance_key="series-1",
+            series_uid="series-1",
+            is_marker=True,
+        )
+    }
+
+    mock_target = AsyncMock()
+    mock_target.async_backfill_new_events = AsyncMock(return_value=found)
     entry.runtime_data = mock_target
 
-    scheduler = hass.data[DOMAIN]["reminder_scheduler"]
-    scheduler.async_schedule = AsyncMock()
-
-    # First poll only establishes the baseline (is_first_poll gates off
-    # notifications entirely) -- the series itself only appears afterward.
-    anchor = _poll_anchor()
     await _fire_poll(hass, freezer, anchor, 60)
-    mock_target.async_backfill_new_events = AsyncMock(return_value=found)
 
-    await _fire_poll(hass, freezer, anchor, 120)
-
-    assert scheduler.async_schedule.call_count == 3
+    calendar_entries = _calendar_entries(scheduler)
+    assert len(calendar_entries) == 3
+    assert "series-1" not in {r["instance_key"] for r in calendar_entries}

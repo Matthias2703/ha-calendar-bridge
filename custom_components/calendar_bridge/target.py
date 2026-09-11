@@ -38,22 +38,37 @@ class SeenEvent:
 
     Carries enough of the event to let the caller decide whether to also
     schedule an independent HA-native notification for it (see
-    `__init__.py`'s poller) -- the persisted seen-UID baseline itself only
-    ever needs `uid`.
+    `__init__.py`'s poller and `reminder_scheduler.py`'s reconciliation) --
+    the persisted seen-UID baseline itself only ever needs `uid`.
     """
 
     uid: str
     summary: str
     start: datetime | date
-    # True for a per-poll baseline marker that must never trigger its own HA
-    # notification: a recurring series' master-id entry (both backends, so a
-    # future instance "nachrueckt" without silently bypassing the known-uids
-    # baseline check via the master), or a CalDAV series instance being
-    # migrated from the old bare-UID baseline to per-instance keys (see
-    # `series_instance_key`) on the first poll after this feature ships --
-    # __init__.py's poller can't otherwise tell "new to the baseline, but
-    # deliberately not new to the user" apart from a genuinely new event.
-    suppress_notification: bool = False
+    # Deterministic, cross-backend identity for this specific instance --
+    # what `reminder_scheduler.py`'s Paket-A1 store keys a notification by,
+    # and what a `create_event(notify)` call independently computes from its
+    # own return value so the two converge on the same key without either
+    # side querying the other. Format decided per backend/case in
+    # `google_target.py`/`caldav_target.py` (mostly `series_instance_key`).
+    # Distinct from `uid` above, which keeps its own pre-existing meaning
+    # (the seen-baseline/backfill dedup key) unchanged.
+    instance_key: str
+    # The backend-native identifier shared by every instance of the same
+    # underlying event/series (Google: iCalUID; CalDAV: the master's own
+    # UID) -- used only to recognize "this is still logically the same
+    # event" across an `instance_key` format change (e.g. a single event
+    # turning into a series), so an already-sent notification's `sent`
+    # marker can be carried over instead of sending a second one.
+    series_uid: str
+    # True only for a synthetic, non-real baseline marker that must never
+    # itself trigger a notification: a recurring series' master-id entry
+    # (both backends, so a future instance "nachrueckt" without silently
+    # bypassing the known-uids baseline check via the master). A CalDAV
+    # series instance being migrated from the old bare-UID baseline to
+    # per-instance keys is a *real* event and must NOT set this -- Paket A1
+    # notifies for it like any other real, currently-upcoming event.
+    is_marker: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -206,6 +221,19 @@ def series_instance_key(uid: str, recurrence_id: datetime | date) -> str:
     identical key.
     """
     return f"{uid}#{as_utc(recurrence_id).isoformat()}"
+
+
+def event_has_started(start: datetime | date, now: datetime) -> bool:
+    """Whether `start` is at or before `now` -- used for Paket A1's "missed fire time" rule.
+
+    A timed `start` compares as an instant (`now` must itself be tz-aware,
+    e.g. `dt_util.utcnow()`). An all-day `start` compares by calendar date in
+    HA's own configured zone -- an all-day event is considered "started" for
+    its whole local day, not just from local midnight as a UTC instant.
+    """
+    if isinstance(start, datetime):
+        return now >= as_utc(start)
+    return dt_util.as_local(now).date() >= start
 
 
 def effective_reminder_minutes(all_day: bool, minutes_before: int, time_of_day: time | None) -> int:

@@ -51,8 +51,8 @@ from .target import (
     EventSpec,
     EventUpdate,
     ReminderSpec,
-    compute_reminder_fire_at,
     render_notify_message,
+    series_instance_key,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -224,7 +224,7 @@ async def async_handle_create_event(hass: HomeAssistant, call: ServiceCall) -> S
 
         if ATTR_NOTIFY in call.data:
             await _async_schedule_notification(
-                hass, entry.entry_id, call.data[ATTR_NOTIFY], base_spec
+                hass, entry.entry_id, subentry_id, uid, call.data[ATTR_NOTIFY], base_spec
             )
 
     return {"created": created}
@@ -321,11 +321,25 @@ async def async_handle_update_event(hass: HomeAssistant, call: ServiceCall) -> S
 
 
 async def _async_schedule_notification(
-    hass: HomeAssistant, entry_id: str, notify_data: dict[str, Any], spec: EventSpec
+    hass: HomeAssistant,
+    entry_id: str,
+    subentry_id: str,
+    uid: str,
+    notify_data: dict[str, Any],
+    spec: EventSpec,
 ) -> None:
     """Schedule the optional HA-native notification reminder."""
-    fire_at = compute_reminder_fire_at(spec.start, notify_data[ATTR_MINUTES_BEFORE], None)
+    instance_key = series_instance_key(uid, spec.start) if spec.rrule else uid
     message = render_notify_message(notify_data.get(ATTR_NOTIFY_MESSAGE), spec.summary, spec.start)
 
     scheduler: ReminderScheduler = hass.data[DOMAIN]["reminder_scheduler"]
-    await scheduler.async_schedule(notify_data[ATTR_NOTIFY_TARGET], fire_at, message, entry_id)
+    await scheduler.async_schedule_explicit(
+        entry_id,
+        subentry_id,
+        instance_key,
+        uid,
+        notify_data[ATTR_NOTIFY_TARGET],
+        notify_data[ATTR_MINUTES_BEFORE],
+        message,
+        spec.start,
+    )

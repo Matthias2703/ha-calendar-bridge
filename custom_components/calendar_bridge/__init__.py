@@ -58,7 +58,7 @@ from .services import (
     async_handle_delete_event,
     async_handle_update_event,
 )
-from .target import SeenEvent, compute_reminder_fire_at, render_notify_message
+from .target import SeenEvent, render_notify_message
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -114,24 +114,6 @@ def _notify_settings(subentry: Any) -> tuple[str, int, str | None] | None:
         subentry.data.get(CONF_NOTIFY_MINUTES_BEFORE, DEFAULT_NOTIFY_MINUTES_BEFORE),
         subentry.data.get(CONF_NOTIFY_MESSAGE_TEMPLATE) or None,
     )
-
-
-async def _async_schedule_ha_notification(
-    scheduler: ReminderScheduler,
-    entry_id: str,
-    target: str,
-    minutes_before: int,
-    summary: str,
-    start: datetime | date,
-    message_template: str | None = None,
-) -> None:
-    """Schedule an HA-native notification for a newly-detected calendar event."""
-    fire_at = compute_reminder_fire_at(start, minutes_before, None)
-    try:
-        message = render_notify_message(message_template, summary, start)
-        await scheduler.async_schedule(target, fire_at, message, entry_id)
-    except Exception:  # noqa: BLE001 -- one failed schedule must not break the poll
-        _LOGGER.warning("Failed to schedule an HA notification for '%s'", summary, exc_info=True)
 
 
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
@@ -344,27 +326,24 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
                     continue
                 await seen_events.async_add(calendar_ref, {seen.uid for seen in found})
 
-                notify = _notify_settings(subentry)
-                if notify is not None and not is_first_poll:
-                    notify_target, notify_minutes_before, notify_message_template = notify
-                    for seen in found:
-                        # `suppress_notification` covers what a plain
-                        # known-uids check can't: a series' master-id
-                        # baseline entry, or a CalDAV series being migrated
-                        # to per-instance keys -- both must join the
-                        # baseline above without notifying (see
-                        # `SeenEvent`/B1).
-                        if seen.uid in known_before or seen.suppress_notification:
-                            continue
-                        await _async_schedule_ha_notification(
-                            scheduler,
-                            entry.entry_id,
-                            notify_target,
-                            notify_minutes_before,
-                            seen.summary,
-                            seen.start,
-                            notify_message_template,
-                        )
+                # Paket A1: every real (non-marker) upcoming event gets a
+                # calendar notification if the switch is on -- regardless of
+                # `is_first_poll` (that gate is specific to the native
+                # VALARM/Google reminder backfill above, which never should
+                # retroactively patch years of pre-existing events; a bounded
+                # 48h-ahead notification isn't that flood). The scheduler's
+                # own reconciliation (decision D) handles matching against
+                # already-planned entries, the 48h window, explicit
+                # `create_event(notify)` precedence, and removing anything
+                # that no longer belongs.
+                await scheduler.async_reconcile_calendar(
+                    entry.entry_id,
+                    subentry.subentry_id,
+                    _notify_settings(subentry),
+                    [seen for seen in found if not seen.is_marker],
+                    _POLL_LOOKAHEAD,
+                    render_notify_message,
+                )
 
     async_track_time_interval(hass, _async_poll_for_new_events, _POLL_INTERVAL)
     return True
@@ -388,10 +367,62 @@ async def async_setup_entry(hass: HomeAssistant, entry: CalendarBridgeConfigEntr
     for subentry_id, subentry in entry.subentries.items():
         async_create_or_update_device(hass, entry, subentry_id, subentry.data[CONF_DISPLAY_NAME])
 
+    entry.async_on_unload(entry.add_update_listener(_async_handle_entry_updated))
+
+    # `async_unload_entry` cancels this entry's live timers on every unload
+    # (including a reload's own unload half) -- re-establish them here so a
+    # reauth or an options-driven reload doesn't silently strand a
+    # still-pending reminder with nothing left to ever fire it.
+    scheduler: ReminderScheduler = hass.data[DOMAIN]["reminder_scheduler"]
+    await scheduler.async_resume_entry(entry.entry_id)
+
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     return True
 
 
+async def _async_handle_entry_updated(
+    hass: HomeAssistant, entry: CalendarBridgeConfigEntry
+) -> None:
+    """Immediately drop notifications a config/subentry change just invalidated (R4-02).
+
+    Fires for *any* entry/subentry change (HA gives no "what changed"
+    diff) -- a subentry no longer present was removed; one still present
+    but with its notify switch off gets only its calendar-sourced entries
+    purged (an explicit `create_event(notify)` reminder is independent of
+    the switch). A vorlauf/target/template change alone is deliberately
+    left alone here -- the next poll's reconciliation already picks it up.
+    """
+    scheduler: ReminderScheduler = hass.data[DOMAIN]["reminder_scheduler"]
+    current_subentry_ids = set(entry.subentries)
+    for subentry_id in scheduler.subentry_ids_with_entries(entry.entry_id):
+        if subentry_id not in current_subentry_ids:
+            await scheduler.async_purge_subentry(entry.entry_id, subentry_id, calendar_only=False)
+    for subentry_id, subentry in entry.subentries.items():
+        if not subentry.data.get(CONF_NOTIFY_ENABLED, DEFAULT_NOTIFY_ENABLED):
+            await scheduler.async_purge_subentry(entry.entry_id, subentry_id, calendar_only=True)
+
+
 async def async_unload_entry(hass: HomeAssistant, entry: CalendarBridgeConfigEntry) -> bool:
-    """Unload a config entry."""
-    return await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
+    """Unload a config entry.
+
+    A1-05: unsubscribe the scheduler's in-memory timers only once the
+    platform unload has actually succeeded. `async_unload_platforms`
+    returning `False` leaves the entry in `FAILED_UNLOAD` -- still present,
+    still polled -- but the store entries survive either way; stripping
+    their live timers regardless would strand one whose event is far enough
+    out that the poller's own reconciliation (bounded by its own lookahead)
+    would never replan it.
+    """
+    unloaded = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
+    if unloaded:
+        scheduler: ReminderScheduler = hass.data[DOMAIN]["reminder_scheduler"]
+        scheduler.async_unsub_entry(entry.entry_id)
+    return unloaded
+
+
+async def async_remove_entry(hass: HomeAssistant, entry: CalendarBridgeConfigEntry) -> None:
+    """Delete this entry's reminders (R6-03); delete the whole store if it was the last entry."""
+    scheduler: ReminderScheduler = hass.data[DOMAIN]["reminder_scheduler"]
+    await scheduler.async_remove_entry_data(entry.entry_id)
+    if not hass.config_entries.async_entries(DOMAIN):
+        await scheduler.async_remove_store()
