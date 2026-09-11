@@ -28,6 +28,7 @@ from .target import (
     all_day_bounds,
     as_utc,
     effective_reminder_minutes,
+    event_starts_match,
 )
 
 if TYPE_CHECKING:
@@ -55,6 +56,16 @@ def build_client(url: str, username: str, password: str, verify_ssl: bool) -> ca
     return caldav.DAVClient(
         url=url, username=username, password=password, ssl_verify_cert=verify_ssl
     )
+
+
+def _is_series_related(master: icalendar.Event) -> bool:
+    """True if `master` is a recurring series (RRULE/RDATE) or an exception (RECURRENCE-ID).
+
+    calendar.create_event never creates a series, so a genuine reactive-
+    backfill candidate can never legitimately be one either -- matching one
+    would patch the whole series' VALARM via its master.
+    """
+    return bool(master.get("rrule") or master.get("rdate") or master.get("recurrence-id"))
 
 
 def discover_calendars(client: caldav.DAVClient) -> list[caldav.Calendar]:
@@ -210,6 +221,14 @@ class CalDavCalendarTarget:
         )
         window = timedelta(hours=1)
         events = calendar.date_search(start_dt - window, start_dt + window)
+
+        # A "candidate" needs the same summary, the exact same start
+        # (`event_starts_match` -- never a timed/all-day mismatch), no
+        # series association (a genuine calendar.create_event call never
+        # creates one, so a series match here is always the wrong event),
+        # and no existing VALARM. Exactly one such candidate is required --
+        # 0 or >1 refuses to write, to never patch the wrong event.
+        candidates: list[tuple[Any, Any]] = []
         for event in events:
             component = event.icalendar_component
             if str(component.get("summary", "")) != summary:
@@ -229,24 +248,32 @@ class CalDavCalendarTarget:
             master = (
                 self._find_master_component(instance_calendar) or real_event.icalendar_component
             )
+            if not event_starts_match(master["dtstart"].dt, start):
+                continue
+            if _is_series_related(master):
+                continue
             if list(master.walk("VALARM")):
                 continue  # already has a reminder
-            if dry_run:
-                return True
-            event_all_day = not isinstance(master["dtstart"].dt, datetime)
-            effective_minutes = effective_reminder_minutes(event_all_day, minutes_before, None)
-            master.add_component(self._build_alarm(summary, method, effective_minutes))
-            try:
-                real_event.save()
-            except caldav.lib.error.PutError:
-                _LOGGER.warning(
-                    "Failed to save a backfilled reminder onto '%s'", summary, exc_info=True
-                )
-                return False
-            _LOGGER.info("Backfilled a %s reminder onto '%s'", method, summary)
+            candidates.append((real_event, master))
+
+        if len(candidates) != 1:
+            _LOGGER.debug("No single matching reminder-less event found to backfill")
+            return False
+        if dry_run:
             return True
-        _LOGGER.debug("No matching reminder-less event found for '%s' to backfill", summary)
-        return False
+        real_event, master = candidates[0]
+        event_all_day = not isinstance(master["dtstart"].dt, datetime)
+        effective_minutes = effective_reminder_minutes(event_all_day, minutes_before, None)
+        master.add_component(self._build_alarm(summary, method, effective_minutes))
+        try:
+            real_event.save()
+        except caldav.lib.error.PutError:
+            _LOGGER.warning(
+                "Failed to save a backfilled reminder onto '%s'", summary, exc_info=True
+            )
+            return False
+        _LOGGER.info("Backfilled a %s reminder onto '%s'", method, summary)
+        return True
 
     async def async_backfill_new_events(
         self,

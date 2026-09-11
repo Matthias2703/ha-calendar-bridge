@@ -1271,9 +1271,7 @@ async def test_backfill_reminder_matches_exact_start_not_first_returned_event():
         "Arzt", has_alarm=False, start=datetime(2026, 10, 1, 10, 0, tzinfo=UTC), uid="uid-late"
     )
     mock_calendar.date_search.return_value = [early, late]
-    mock_calendar.event_by_uid.side_effect = lambda uid: {"uid-early": early, "uid-late": late}[
-        uid
-    ]
+    mock_calendar.event_by_uid.side_effect = lambda uid: {"uid-early": early, "uid-late": late}[uid]
 
     with patch(
         "custom_components.calendar_bridge.caldav_target.build_client", return_value=mock_client
@@ -1327,9 +1325,7 @@ async def test_backfill_reminder_matches_across_utc_tzid_and_floating_dtstart(
     }
     for label, event_dtstart in representations.items():
         mock_client, mock_calendar = _mock_client_with_calendar(calendar_ref)
-        event = _mock_caldav_event(
-            "Arzt", has_alarm=False, start=event_dtstart, uid=f"uid-{label}"
-        )
+        event = _mock_caldav_event("Arzt", has_alarm=False, start=event_dtstart, uid=f"uid-{label}")
         mock_calendar.date_search.return_value = [event]
         mock_calendar.event_by_uid.return_value = event
 
@@ -1352,7 +1348,9 @@ async def test_backfill_reminder_does_not_match_a_different_instant(europe_berli
     mock_client, mock_calendar = _mock_client_with_calendar(calendar_ref)
     # Floats at 11:00 Europe/Berlin (09:00 UTC) -- request is for 10:00
     # Europe/Berlin (08:00 UTC). Same summary, wrong instant.
-    event = _mock_caldav_event("Arzt", has_alarm=False, start=datetime(2026, 10, 1, 11, 0), uid="uid-1")
+    event = _mock_caldav_event(
+        "Arzt", has_alarm=False, start=datetime(2026, 10, 1, 11, 0), uid="uid-1"
+    )
     mock_calendar.date_search.return_value = [event]
     mock_calendar.event_by_uid.return_value = event
 

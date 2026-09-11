@@ -19,6 +19,7 @@ from urllib.parse import quote
 
 from gcal_sync.api import (
     CALENDAR_EVENTS_URL,
+    CALENDAR_LIST_URL,
     INSTANCES_URL,
     GoogleCalendarService,
     ListEventsRequest,
@@ -42,6 +43,7 @@ from .target import (
     SeenEvent,
     all_day_bounds,
     effective_reminder_minutes,
+    event_starts_match,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -123,15 +125,39 @@ def _as_utc_datetime(value: datetime | date) -> datetime:
     return dt_util.as_utc(datetime.combine(value, datetime.min.time()))
 
 
-def _has_explicit_reminder(event: GoogleEvent) -> bool:
-    """An event only has *our* kind of guaranteed reminder with an override list.
+def _has_reminder_override(event: GoogleEvent) -> bool:
+    """Whether `event` has an explicit (non-useDefault) reminder override list.
 
-    `useDefault: true` (the default Google assigns to any event that doesn't
-    specify reminders) merely inherits the calendar's own default reminders --
-    which may be none at all. Only a non-empty `overrides` list is a reminder
-    this integration can be sure exists.
+    Doesn't decide "has a reminder at all" by itself: `useDefault: true` (or
+    a missing `reminders`, which Google also treats as `useDefault: true`)
+    means the calendar's own default reminders apply instead, which may or
+    may not be empty -- see `_async_default_reminders_are_empty`.
     """
     return bool(event.reminders and not event.reminders.use_default and event.reminders.overrides)
+
+
+def _is_series_event(event: GoogleEvent) -> bool:
+    """True if `event` is part of a recurring series (a master or an instance).
+
+    calendar.create_event never creates a series, so a genuine reactive-
+    backfill candidate can never legitimately be one either -- matching one
+    would patch a single instance's reminder while the rest of the series
+    (or, for the CalDAV backend, the whole series at once) stays as it was.
+    """
+    return bool(event.recurring_event_id or event.recurrence)
+
+
+async def _async_default_reminders_are_empty(auth: AbstractAuth, calendar_ref: str) -> bool:
+    """Whether calendar_ref's own default reminders (applied when useDefault=true) are empty.
+
+    Raw request: gcal_sync's typed `Calendar` (from the CalendarList API) and
+    `CalendarBasic` (from the plain `calendars` resource) models don't expose
+    `defaultReminders` -- it only appears on a `calendarList` entry's raw
+    JSON, so this bypasses the typed wrapper the same way `_async_find_event`
+    already does for a field gcal_sync doesn't model.
+    """
+    response = await auth.get_json(f"{CALENDAR_LIST_URL}/{quote(calendar_ref, safe='')}")
+    return not response.get("defaultReminders")
 
 
 def _build_event(spec: EventSpec) -> GoogleEvent:
@@ -271,41 +297,63 @@ class GoogleCalendarTarget:
         *,
         dry_run: bool = False,
     ) -> bool:
-        """Add a default reminder to a matching event that has none.
+        """Add a default reminder to the one matching event that has none.
 
         Mirrors the CalDAV backend's same-named method: catches an event
-        created through HA's own `calendar.create_event` service.
+        created through HA's own `calendar.create_event` service. A
+        "matching" candidate needs the same summary, the exact same start
+        (`event_starts_match` -- never a timed/all-day mismatch), no series
+        association, and no reminder already (an explicit override, or
+        `useDefault=true`/missing with non-empty calendar default reminders).
+        Anything other than exactly one such candidate refuses to write, to
+        never patch the wrong event on an ambiguous or empty match.
         """
         try:
-            service, _ = await self._async_service()
+            service, auth = await self._async_service()
             start_dt = _as_utc_datetime(start)
             window = timedelta(hours=1)
             request = ListEventsRequest(
                 calendarId=calendar_ref, timeMin=start_dt - window, timeMax=start_dt + window
             )
             response = await service.async_list_events(request)
+            matches: list[GoogleEvent] = []
             async for page in response:
                 for event in page.items:
-                    if event.summary != summary or _has_explicit_reminder(event):
-                        continue
-                    if dry_run:
-                        return True
-                    event_all_day = event.start.date_time is None
-                    effective_minutes = effective_reminder_minutes(
-                        event_all_day, minutes_before, None
+                    if (
+                        event.summary == summary
+                        and event_starts_match(event.start.value, start)
+                        and not _is_series_event(event)
+                    ):
+                        matches.append(event)
+
+            candidates: list[GoogleEvent] = []
+            default_reminders_empty: bool | None = None
+            for event in matches:
+                if _has_reminder_override(event):
+                    continue
+                if default_reminders_empty is None:
+                    default_reminders_empty = await _async_default_reminders_are_empty(
+                        auth, calendar_ref
                     )
-                    await service.async_patch_event(
-                        calendar_ref,
-                        cast(str, event.id),
-                        _reminder_body(method, effective_minutes),
-                    )
-                    _LOGGER.info("Backfilled a %s reminder onto '%s'", method, summary)
-                    return True
+                if default_reminders_empty:
+                    candidates.append(event)
+
+            if len(candidates) != 1:
+                _LOGGER.debug("No single matching reminder-less event found to backfill")
+                return False
+            if dry_run:
+                return True
+            event = candidates[0]
+            event_all_day = event.start.date_time is None
+            effective_minutes = effective_reminder_minutes(event_all_day, minutes_before, None)
+            await service.async_patch_event(
+                calendar_ref, cast(str, event.id), _reminder_body(method, effective_minutes)
+            )
+            _LOGGER.info("Backfilled a %s reminder onto '%s'", method, summary)
+            return True
         except ApiException:
             _LOGGER.warning("Could not reach %s to check for a matching event", calendar_ref)
             return False
-        _LOGGER.debug("No matching reminder-less event found for '%s' to backfill", summary)
-        return False
 
     async def async_backfill_new_events(
         self,
@@ -327,13 +375,15 @@ class GoogleCalendarTarget:
         couldn't be reached this poll.
         """
         try:
-            service, _ = await self._async_service()
+            service, auth = await self._async_service()
             now = datetime.now(UTC)
             request = ListEventsRequest(
                 calendarId=calendar_ref, timeMin=now - timedelta(days=1), timeMax=now + lookahead
             )
             response = await service.async_list_events(request)
             seen: set[SeenEvent] = set()
+            default_reminders_empty: bool | None = None
+            default_reminders_lookup_attempted = False
             async for page in response:
                 for event in page.items:
                     # `event.id` is unique per recurrence instance; the
@@ -344,7 +394,25 @@ class GoogleCalendarTarget:
                     if not uid:
                         continue
                     seen.add(SeenEvent(uid=uid, summary=event.summary, start=event.start.value))
-                    if uid in known_uids or skip_backfill or _has_explicit_reminder(event):
+                    if uid in known_uids or skip_backfill or _has_reminder_override(event):
+                        continue
+                    if not default_reminders_lookup_attempted:
+                        default_reminders_lookup_attempted = True
+                        try:
+                            default_reminders_empty = await _async_default_reminders_are_empty(
+                                auth, calendar_ref
+                            )
+                        except ApiException:
+                            # Only this event's backfill is skipped -- an
+                            # unrelated lookup failure must not lose the rest
+                            # of this poll's seen-baseline update (the outer
+                            # except below would return None for the whole
+                            # calendar instead).
+                            _LOGGER.warning(
+                                "Could not check the calendar's default reminders; "
+                                "skipping this event's backfill"
+                            )
+                    if not default_reminders_empty:
                         continue
                     event_all_day = event.start.date_time is None
                     effective_minutes = effective_reminder_minutes(
