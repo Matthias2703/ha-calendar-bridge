@@ -45,6 +45,7 @@ from .target import (
     effective_reminder_minutes,
     event_starts_match,
     occurrence_matches,
+    series_instance_key,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -503,9 +504,34 @@ class GoogleCalendarTarget:
                 uid = event.id or event.ical_uuid
                 if not uid:
                     continue
-                seen.add(SeenEvent(uid=uid, summary=event.summary, start=event.start.value))
-
+                ical_uid = event.ical_uuid or uid
                 master_id = event.recurring_event_id
+                # Paket A1's cross-backend notification identity: a series
+                # instance embeds its *original* start (stable across a
+                # later move -- `original_start_time` is populated on every
+                # regular `events.list` response, see `EVENT_FIELDS`), a
+                # single event is just its iCalUID (no start embedded, so a
+                # rescheduled single event's own reminder entry is found
+                # and updated in place rather than replaced).
+                if master_id:
+                    original_start = (
+                        event.original_start_time.value
+                        if event.original_start_time is not None
+                        else event.start.value
+                    )
+                    instance_key = series_instance_key(ical_uid, original_start)
+                else:
+                    instance_key = ical_uid
+                seen.add(
+                    SeenEvent(
+                        uid=uid,
+                        summary=event.summary,
+                        start=event.start.value,
+                        instance_key=instance_key,
+                        series_uid=ical_uid,
+                    )
+                )
+
                 if master_id and master_id not in series_baseline_added:
                     series_baseline_added.add(master_id)
                     seen.add(
@@ -513,7 +539,9 @@ class GoogleCalendarTarget:
                             uid=master_id,
                             summary=event.summary,
                             start=event.start.value,
-                            suppress_notification=True,
+                            instance_key=master_id,
+                            series_uid=ical_uid,
+                            is_marker=True,
                         )
                     )
 

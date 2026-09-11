@@ -41,6 +41,8 @@ Configuration happens entirely through the UI (Settings → Devices & Services �
 
 Each calendar also has a **"Backfill reminders onto external events"** option (in the "Add calendar"/"Edit calendar defaults" dialog), off by default. On, the periodic poll also adds the default reminder to events it finds that weren't created through Home Assistant — added directly in the Google or iOS Calendar app, or an accepted invitation. Existing calendars change behavior with this release: that automatic backfill for externally-created events is now off until you turn the option on; reminders it already backfilled before stay as they are.
 
+Upgrading to this release also discards any Home Assistant notification still pending from before the upgrade (both the per-calendar and the per-event kind) — it isn't carried over to the new format, so an already-scheduled notification from an older version won't fire; a per-calendar notification is simply replanned by its next poll.
+
 ## Usage
 
 ```yaml
