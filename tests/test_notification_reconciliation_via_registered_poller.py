@@ -229,7 +229,7 @@ async def test_caldav_explicit_entry_follows_a_move_then_a_shape_change_via_the_
     assert fire_at is not None
     await _fire_poll(hass, freezer, fire_at + timedelta(seconds=1))
 
-    assert calls == ["Standup"] or len(calls) == 1
+    assert calls == ["Reminder: Standup"]
     assert _explicit_entries(scheduler)[0]["sent"] is True
 
 
@@ -337,6 +337,6 @@ async def test_google_explicit_entry_follows_a_move_then_a_shape_change_via_the_
     assert fire_at is not None
     await _fire_poll(hass, freezer, fire_at + timedelta(seconds=1))
 
-    assert len(calls) == 1
+    assert calls == ["Reminder: Standup"]
     assert entries_after_rekey[0]["id"] == _explicit_entries(scheduler)[0]["id"]
     assert _explicit_entries(scheduler)[0]["sent"] is True
