@@ -29,6 +29,7 @@ from .target import (
     as_utc,
     effective_reminder_minutes,
     event_starts_match,
+    occurrence_matches,
     series_instance_key,
 )
 
@@ -553,13 +554,15 @@ class CalDavCalendarTarget:
         if `occurrence` doesn't correspond to any instance the series
         actually generates (wrong time, wrong day, already excluded, ...).
         `recurrence_id` is the instance's *original* scheduled slot (always
-        `event_starts_match`-equal to `occurrence`); `start`/`end` are its
+        `occurrence_matches`-equal to `occurrence`); `start`/`end` are its
         *current* (possibly already-moved) bounds; `existing_override` is the
         already-present exception VEVENT for this instance, if any.
 
-        Two-step resolution, both matching via `event_starts_match` (never a
+        Two-step resolution, both matching via `occurrence_matches` (never a
         plain `==`, which neither normalizes timezones nor accepts a naive
-        `occurrence` against a TZID master):
+        `occurrence` against a TZID master, nor a midnight-datetime
+        `occurrence` -- HA's `cv.datetime` never produces a bare `date` --
+        against an all-day master's date-valued RECURRENCE-ID):
 
         1. Search `instance_calendar`'s own subcomponents for an exception
            VEVENT (has RECURRENCE-ID) whose RECURRENCE-ID matches -- found
@@ -589,7 +592,7 @@ class CalDavCalendarTarget:
             if not isinstance(component, icalendar.Event) or "RECURRENCE-ID" not in component:
                 continue
             recurrence_id = component["RECURRENCE-ID"].dt
-            if event_starts_match(recurrence_id, occurrence):
+            if occurrence_matches(recurrence_id, occurrence):
                 start = component["dtstart"].dt
                 end = component["dtend"].dt if "dtend" in component else start
                 return recurrence_id, start, end, component
@@ -599,7 +602,7 @@ class CalDavCalendarTarget:
             occurrence - window, occurrence + window
         ):
             recurrence_id = component["RECURRENCE-ID"].dt
-            if event_starts_match(recurrence_id, occurrence):
+            if occurrence_matches(recurrence_id, occurrence):
                 start = component["dtstart"].dt
                 end = component["dtend"].dt if "dtend" in component else start
                 return recurrence_id, start, end, None

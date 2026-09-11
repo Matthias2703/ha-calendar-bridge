@@ -44,6 +44,7 @@ from .target import (
     all_day_bounds,
     effective_reminder_minutes,
     event_starts_match,
+    occurrence_matches,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -623,7 +624,7 @@ class GoogleCalendarTarget:
                     parsed = None
                 if parsed is None:
                     continue
-                if event_starts_match(parsed, occurrence):
+                if occurrence_matches(parsed, occurrence):
                     return cast(dict[str, Any], item)
             page_token = response.get("nextPageToken")
             if not page_token:
