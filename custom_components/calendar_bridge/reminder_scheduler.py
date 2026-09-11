@@ -139,6 +139,24 @@ class _ReminderStore(Store[dict[str, Any]]):
 
 
 def _parse_event_start(raw: str) -> datetime | date:
+    """Parse a stored `event_start` back into whatever `_serialize_event_start` wrote.
+
+    Order matters: `dt_util.parse_datetime("2026-09-13")` -- the exact form
+    `_serialize_event_start` writes for an all-day event's bare `date` --
+    *succeeds*, returning a naive `datetime` instead of ever reaching the
+    `date` branch below. A naive datetime then crashes any comparison
+    against the rest of this module's (always tz-aware) `datetime`s, e.g.
+    `_prune`'s own age check. `_serialize_event_start` only ever produces a
+    "T"-free string for a `date` and a "T"-containing one for a `datetime`
+    (`as_utc(...).isoformat()` always includes a time component), so that's
+    a reliable, cheap way to try the right parser first -- with the other
+    parser still tried as a fallback either way, for any value that reached
+    the store before this normalization existed.
+    """
+    if "T" not in raw:
+        parsed_date = dt_util.parse_date(raw)
+        if parsed_date is not None:
+            return parsed_date
     parsed_dt = dt_util.parse_datetime(raw)
     if parsed_dt is not None:
         return parsed_dt
@@ -585,8 +603,11 @@ class ReminderScheduler:
         series_uid = entry["series_uid"]
         stored_key = entry["instance_key"]
         if stored_key == series_uid:
-            if not isinstance(stored_start, datetime):
-                return None
+            # H1: `series_instance_key` accepts a `date` fine (`as_utc`
+            # passes it through unchanged) -- both backends produce exactly
+            # this shape for an all-day series' first instance (Google's
+            # `originalStartTime.date`, CalDAV's `RECURRENCE-ID;VALUE=DATE`),
+            # so there is no reason to reject it here.
             candidate_key = series_instance_key(series_uid, stored_start)
         elif stored_key.startswith(f"{series_uid}#"):
             candidate_key = series_uid
