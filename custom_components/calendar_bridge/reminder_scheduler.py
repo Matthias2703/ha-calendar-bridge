@@ -146,11 +146,11 @@ class ReminderScheduler:
         # the entry id lets diagnostics report a count scoped to one account
         # instead of this whole, domain-wide scheduler.
         self._unsub: dict[str, tuple[Any, str]] = {}
-        # Reminder ids whose send is currently in flight (a timer callback
-        # awaiting the notify call, or a reconciliation about to). Checked
-        # and set synchronously (no `await` in between) by `_send_now`'s
-        # caller, so a timer firing at the same moment a poll reconciles the
-        # same entry can never both send.
+        # Reminder ids currently claimed for delivery (awaiting or inside
+        # `_deliver`'s notify call). Checked and set synchronously (no
+        # `await` in between) by `_apply`, always called while `self._lock`
+        # is held, so a timer firing at the same moment a poll reconciles
+        # the same entry can never both claim it for delivery.
         self._sending: set[str] = set()
         # Reminder ids with an already-registered `async_at_started`
         # callback (unlike `_schedule`'s timers, HA gives no handle to
@@ -261,7 +261,9 @@ class ReminderScheduler:
         async def _send(_hass: HomeAssistant) -> None:
             self._pending_send_when_started.discard(reminder_id)
             async with self._lock:
-                await self._send_now(reminder)
+                claimed = self._claim_for_delivery(reminder)
+            if claimed is not None:
+                self._spawn_delivery(claimed)
 
         async_at_started(self._hass, _send)
 
@@ -278,7 +280,14 @@ class ReminderScheduler:
         message: str,
         start: datetime | date,
     ) -> None:
-        """Persist and schedule one explicit `create_event(notify)` reminder."""
+        """Persist one explicit `create_event(notify)` reminder and schedule/claim it.
+
+        Returns as soon as the reminder is planned -- a due one is claimed
+        and handed to `_deliver` as a background task, not awaited here, so
+        a slow or hanging `notify` integration never delays the
+        `create_event` service call itself (N5).
+        """
+        claimed: dict[str, Any] | None = None
         async with self._lock:
             now = dt_util.utcnow()
             fire_at = compute_reminder_fire_at(start, minutes_before, None)
@@ -299,8 +308,10 @@ class ReminderScheduler:
             }
             self._data["reminders"].append(reminder)
             await self._store.async_save(self._data)
-            await self._apply(reminder, now)
+            claimed = await self._apply(reminder, now)
             await self._store.async_save(self._data)
+        if claimed is not None:
+            self._spawn_delivery(claimed)
 
     # -- Per-poll reconciliation (calendar-sourced notifications) ------------
 
@@ -320,7 +331,14 @@ class ReminderScheduler:
         than imported, purely to keep this module's import list focused --
         it is always that function in production).
         `notify_settings` is `None` when the calendar's notify switch is off.
+
+        Only decides what's due while `self._lock` is held; every due entry
+        is claimed (`_sending`) and handed to `_deliver` as a background
+        task after the lock is released, so a slow or hanging `notify`
+        integration for one entry never stalls this or any other
+        calendar's reconciliation (N5).
         """
+        to_deliver: list[dict[str, Any]] = []
         async with self._lock:
             now = dt_util.utcnow()
             self._prune(entry_id, subentry_id, now)
@@ -329,11 +347,15 @@ class ReminderScheduler:
             real_by_key = {ev.instance_key: ev for ev in real_events}
             poll_window_end = now + lookahead
 
-            await self._reconcile_explicit(entry_id, subentry_id, real_by_key, poll_window_end, now)
-            await self._reconcile_calendar_entries(
+            to_deliver += await self._reconcile_explicit(
+                entry_id, subentry_id, real_by_key, poll_window_end, now
+            )
+            to_deliver += await self._reconcile_calendar_entries(
                 entry_id, subentry_id, notify_settings, real_by_key, now, migrated, render_message
             )
             await self._store.async_save(self._data)
+        for reminder in to_deliver:
+            self._spawn_delivery(reminder)
 
     def _entries_for(
         self, entry_id: str, subentry_id: str, source: str | None = None
@@ -394,7 +416,8 @@ class ReminderScheduler:
         real_by_key: dict[str, SeenEvent],
         poll_window_end: datetime,
         now: datetime,
-    ) -> None:
+    ) -> list[dict[str, Any]]:
+        to_deliver: list[dict[str, Any]] = []
         for entry in self._entries_for(entry_id, subentry_id, "explicit"):
             ev = real_by_key.get(entry["instance_key"])
             if ev is None:
@@ -425,9 +448,14 @@ class ReminderScheduler:
                 entry["sent"] = False
                 entry["attempts"] = 0
                 self._unschedule(entry["id"])
-                await self._apply(entry, now)
+                claimed = await self._apply(entry, now)
+                if claimed is not None:
+                    to_deliver.append(claimed)
             elif entry["id"] not in self._unsub and not entry["sent"]:
-                await self._apply(entry, now)
+                claimed = await self._apply(entry, now)
+                if claimed is not None:
+                    to_deliver.append(claimed)
+        return to_deliver
 
     async def _reconcile_calendar_entries(
         self,
@@ -438,7 +466,8 @@ class ReminderScheduler:
         now: datetime,
         migrated: bool,
         render_message: Any,
-    ) -> None:
+    ) -> list[dict[str, Any]]:
+        to_deliver: list[dict[str, Any]] = []
         explicit_keys = {
             r["instance_key"] for r in self._entries_for(entry_id, subentry_id, "explicit")
         }
@@ -492,7 +521,9 @@ class ReminderScheduler:
                 entry["sent"] = False
                 entry["attempts"] = 0
                 self._unschedule(entry["id"])
-                await self._apply(entry, now)
+                claimed = await self._apply(entry, now)
+                if claimed is not None:
+                    to_deliver.append(claimed)
             elif changed:
                 entry["target"] = target
                 entry["message"] = message
@@ -501,9 +532,13 @@ class ReminderScheduler:
                     ev.start, minutes_before, None
                 ).isoformat()
                 self._unschedule(entry["id"])
-                await self._apply(entry, now)
+                claimed = await self._apply(entry, now)
+                if claimed is not None:
+                    to_deliver.append(claimed)
             elif entry["id"] not in self._unsub and not entry["sent"]:
-                await self._apply(entry, now)
+                claimed = await self._apply(entry, now)
+                if claimed is not None:
+                    to_deliver.append(claimed)
 
         for key, (target, minutes_before, message, ev) in desired.items():
             fire_at = compute_reminder_fire_at(ev.start, minutes_before, None)
@@ -532,20 +567,25 @@ class ReminderScheduler:
                 # delivered -- silently adopt "already sent" instead.
                 reminder["sent"] = True
                 continue
-            await self._apply(reminder, now)
+            claimed = await self._apply(reminder, now)
+            if claimed is not None:
+                to_deliver.append(claimed)
+        return to_deliver
 
     # -- Shared scheduling/send primitives ------------------------------------
 
     def _schedule(self, reminder: dict[str, Any], fire_at: datetime) -> None:
         async def _fire(_now: datetime) -> None:
-            # A poll's reconciliation (async_reconcile_calendar/
-            # async_schedule_explicit) already holds `self._lock` while it
-            # calls `_apply`/`_send_now` directly -- this is the *other*
-            # caller (a timer firing on its own), so it must acquire the
-            # lock itself here instead. `_send_now`/`_apply` never touch the
-            # lock themselves, so neither path risks a self-deadlock.
+            # A timer firing at its own designated `fire_at` is the
+            # decision already made -- claim it directly rather than
+            # routing through `_apply`'s fire_at/event-started checks
+            # again, or a reminder set for the event's exact start
+            # (`minutes_before=0`) would be wrongly discarded as "already
+            # started" the moment it fires even a fraction of a second late.
             async with self._lock:
-                await self._send_now(reminder)
+                claimed = self._claim_for_delivery(reminder)
+            if claimed is not None:
+                self._spawn_delivery(claimed)
 
         unsub = async_track_point_in_time(self._hass, _fire, fire_at)
         self._unsub[reminder["id"]] = (unsub, reminder.get("entry_id", ""))
@@ -560,55 +600,91 @@ class ReminderScheduler:
         with contextlib.suppress(ValueError):
             self._data["reminders"].remove(reminder)
 
-    async def _apply(self, reminder: dict[str, Any], now: datetime) -> None:
-        """Decision 3 (missed fire time) applied to one entry: send, schedule, or drop."""
+    async def _apply(self, reminder: dict[str, Any], now: datetime) -> dict[str, Any] | None:
+        """Decide what to do with one entry: reschedule, drop, or claim it for delivery.
+
+        Always called while `self._lock` is held -- this is the *only*
+        place that touches `_sending`/decides a send is due. It never calls
+        `notify` itself: a due entry is marked `_sending` here and returned
+        (non-None) so the caller can hand it to `_deliver` as a background
+        task once its own locked section ends, keeping the potentially
+        unbounded `notify` call fully outside the lock (N5/N3).
+        """
         if reminder.get("sent"):
-            return
+            return None
         fire_at = dt_util.parse_datetime(reminder["fire_at"])
         if fire_at is None:
             self._discard(reminder)
-            return
+            return None
         if fire_at > now:
             self._unschedule(reminder["id"])
             self._schedule(reminder, fire_at)
-            return
+            return None
         event_start = _parse_event_start(reminder["event_start"])
         if event_has_started(event_start, now):
             self._discard(reminder)
-            return
-        await self._send_now(reminder)
+            return None
+        return self._claim_for_delivery(reminder)
 
-    async def _send_now(self, reminder: dict[str, Any]) -> None:
-        """The one send path for both a firing timer and an overdue reconciliation hit.
+    def _claim_for_delivery(self, reminder: dict[str, Any]) -> dict[str, Any] | None:
+        """Mark a due reminder `_sending` and hand it back for background delivery.
 
-        Guarded by `_sending` (checked and marked with no `await` in
-        between) so the two can never both deliver the same reminder.
-
-        Always called while `self._lock` is held -- but a real `notify`
-        service call under `blocking=True` has no timeout, so the lock is
-        released for just that one call (reacquired again immediately
-        after) instead of held for its whole, potentially unbounded,
-        duration. Every other calendar's reconciliation and every explicit
-        `create_event(notify)` call would otherwise stall behind whichever
-        single notify integration happens to be slow or hanging. Since the
-        entry can be discarded by another reconciliation while the lock is
-        released, its continued presence in the store is re-checked before
-        writing back the result.
+        Always called while `self._lock` is held -- this (and `_apply`,
+        which delegates here once its own reschedule/discard checks pass)
+        is the *only* place that touches `_sending`, checked and set with
+        no `await` in between so a timer and a reconciliation racing for
+        the same entry can never both claim it (M3). A timer's own `_fire`
+        calls this directly, skipping `_apply`'s fire_at/event-started
+        checks entirely -- once a timer has fired at its own designated
+        point, that's the decision; re-validating "has the event started
+        by now" here would wrongly discard a reminder set for the event's
+        exact start (`minutes_before=0`) that fires even a moment late.
         """
         reminder_id = reminder["id"]
         if reminder_id in self._sending or reminder.get("sent"):
-            return
+            return None
+        if reminder_id not in {r["id"] for r in self._data["reminders"]}:
+            return None
         self._sending.add(reminder_id)
+        return reminder
+
+    def _spawn_delivery(self, reminder: dict[str, Any]) -> None:
+        self._hass.async_create_background_task(
+            self._deliver(reminder), f"calendar_bridge_reminder_{reminder['id']}"
+        )
+
+    async def _deliver(self, reminder: dict[str, Any]) -> None:
+        """Send one entry's notification, without holding the lock for it.
+
+        Runs as a standalone background task: `_apply` claims a due entry
+        (marks it `_sending`) while `self._lock` is held, then the caller
+        releases the lock before handing it here. A real `notify` service
+        call under `blocking=True` has no timeout, so it must never itself
+        hold the lock for its full, potentially unbounded duration -- every
+        other calendar's reconciliation and every explicit
+        `create_event(notify)` call would otherwise stall behind whichever
+        single notify integration happens to be slow or hanging (N5/N3).
+        `self._lock` is only ever touched via `async with` here, so a
+        cancelled delivery task can never leave the lock held by nobody or
+        corrupt another task's acquire/release balance.
+        """
+        reminder_id = reminder["id"]
         try:
+            # No `await` between this membership check and the notify call
+            # below -- a concurrent discard (switch off, subentry/entry
+            # removal) can only run while this coroutine is itself
+            # suspended, so checking synchronously right here is enough to
+            # skip a send for an entry that's already gone.
             if reminder_id not in {r["id"] for r in self._data["reminders"]}:
                 return
             target = reminder["target"]
             if self._hass.states.get(target) is None:
                 _LOGGER.warning("Notify target is unavailable; not sending a reminder")
-                await self._record_failed_attempt(reminder)
+                async with self._lock:
+                    if reminder_id in {r["id"] for r in self._data["reminders"]}:
+                        await self._record_failed_attempt(reminder)
                 return
 
-            self._lock.release()
             try:
                 await self._hass.services.async_call(
                     "notify",
@@ -616,24 +692,23 @@ class ReminderScheduler:
                     {"entity_id": target, "message": reminder["message"]},
                     blocking=True,
                 )
-            except Exception:  # noqa: BLE001 -- a failed send must never abort setup/scheduling
+            except Exception:  # noqa: BLE001 -- a failed send must never abort the caller
                 _LOGGER.warning("Failed to send a reminder notification", exc_info=True)
                 send_ok = False
             else:
                 send_ok = True
-            finally:
-                await self._lock.acquire()
 
-            if reminder_id not in {r["id"] for r in self._data["reminders"]}:
-                # Discarded by a concurrent reconciliation while the lock
-                # was released for the send above -- nothing to write back.
-                return
-            if not send_ok:
-                await self._record_failed_attempt(reminder)
-                return
-            reminder["sent"] = True
-            self._unschedule(reminder_id)
-            await self._store.async_save(self._data)
+            async with self._lock:
+                if reminder_id not in {r["id"] for r in self._data["reminders"]}:
+                    # Discarded by a concurrent reconciliation/removal while
+                    # the send above was in flight -- nothing to write back.
+                    return
+                if not send_ok:
+                    await self._record_failed_attempt(reminder)
+                    return
+                reminder["sent"] = True
+                self._unschedule(reminder_id)
+                await self._store.async_save(self._data)
         finally:
             self._sending.discard(reminder_id)
 
@@ -649,7 +724,7 @@ class ReminderScheduler:
             self._unschedule(reminder["id"])
         # No dedicated retry timer -- the next periodic poll's reconciliation
         # (~60s later) will find `fire_at` still due and try again through
-        # the same `_apply`/`_send_now` path, up to `MAX_SEND_ATTEMPTS`. Save
+        # the same `_apply`/`_deliver` path, up to `MAX_SEND_ATTEMPTS`. Save
         # unconditionally (both branches): a give-up that isn't persisted
         # would resurrect itself and retry forever after a restart, exactly
         # what this cap exists to prevent.
