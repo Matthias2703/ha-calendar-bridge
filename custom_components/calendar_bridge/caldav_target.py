@@ -183,7 +183,7 @@ class CalDavCalendarTarget:
                 method,
                 dry_run,
             )
-        except (CalDavAuthError, CalDavConnectionError):
+        except CalDavAuthError, CalDavConnectionError:
             _LOGGER.warning("Could not reach %s to check for a matching event", calendar_ref)
             return False
 
@@ -286,7 +286,7 @@ class CalDavCalendarTarget:
                 lookahead,
                 skip_backfill,
             )
-        except (CalDavAuthError, CalDavConnectionError):
+        except CalDavAuthError, CalDavConnectionError:
             _LOGGER.warning("Could not reach %s to poll for new events", calendar_ref)
             return None
 
@@ -350,7 +350,7 @@ class CalDavCalendarTarget:
         """Delete the event (or one occurrence of it) identified by uid."""
         try:
             return await self._async_run(self._delete_event, calendar_ref, uid, occurrence)
-        except (CalDavAuthError, CalDavConnectionError):
+        except CalDavAuthError, CalDavConnectionError:
             _LOGGER.warning("Could not reach %s to delete an event", calendar_ref)
             return False
 
@@ -417,7 +417,7 @@ class CalDavCalendarTarget:
         """Apply `updates` to the event (or one occurrence of it) identified by uid."""
         try:
             return await self._async_run(self._update_event, calendar_ref, uid, updates, occurrence)
-        except (CalDavAuthError, CalDavConnectionError):
+        except CalDavAuthError, CalDavConnectionError:
             _LOGGER.warning("Could not reach %s to update an event", calendar_ref)
             return False
 
