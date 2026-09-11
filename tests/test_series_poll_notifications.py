@@ -70,12 +70,24 @@ def _mock_client_for(calendar_ref: str, mock_calendar: MagicMock) -> MagicMock:
     return mock_client
 
 
-async def _fire_poll(hass: HomeAssistant, freezer, offset_seconds: int) -> None:
-    now = dt_util.utcnow()
-    at = now + timedelta(seconds=offset_seconds)
+def _poll_anchor() -> datetime:
+    return dt_util.utcnow()
+
+
+async def _fire_poll(hass: HomeAssistant, freezer, anchor: datetime, offset_seconds: int) -> None:
+    # `offset_seconds` is always relative to a single fixed `anchor` (taken
+    # once per test, before any poll fires) -- recomputing "now" from the
+    # already-advanced frozen clock on each call would silently compound the
+    # offsets across successive polls.
+    at = anchor + timedelta(seconds=offset_seconds)
     freezer.move_to(at)
     async_fire_time_changed(hass, at)
-    await hass.async_block_till_done()
+    # The CalDAV target's poll runs its blocking work via
+    # `hass.async_add_executor_job` -- `wait_background_tasks=True` is
+    # needed so this actually waits for that executor job (and everything
+    # awaited after it, like the seen-events store write) to finish before
+    # the next poll fires, not just the event-loop-only tasks.
+    await hass.async_block_till_done(wait_background_tasks=True)
 
 
 @pytest.mark.asyncio
@@ -129,13 +141,14 @@ async def test_k_caldav_series_migration_suppresses_notifications_until_next_pol
         [_resource([day2, day3, day4])],
     ]
 
+    anchor = _poll_anchor()
     with patch(
         "custom_components.calendar_bridge.caldav_target.build_client", return_value=mock_client
     ):
-        await _fire_poll(hass, freezer, 60)
+        await _fire_poll(hass, freezer, anchor, 60)
         assert scheduler.async_schedule.call_count == 0
 
-        await _fire_poll(hass, freezer, 120)
+        await _fire_poll(hass, freezer, anchor, 120)
         assert scheduler.async_schedule.call_count == 1
 
 
@@ -175,7 +188,7 @@ async def test_l_caldav_single_event_with_old_uid_is_not_treated_as_migrating(
     with patch(
         "custom_components.calendar_bridge.caldav_target.build_client", return_value=mock_client
     ):
-        await _fire_poll(hass, freezer, 60)
+        await _fire_poll(hass, freezer, _poll_anchor(), 60)
 
     assert scheduler.async_schedule.call_count == 0
 
@@ -201,12 +214,18 @@ async def test_o_google_series_notifies_once_per_instance_never_for_the_master(
     found = {
         SeenEvent(uid=f"evt{i}", summary="Standup", start=s) for i, s in enumerate(starts, start=1)
     } | {SeenEvent(uid="M", summary="Standup", start=starts[0], suppress_notification=True)}
-    mock_target.async_backfill_new_events = AsyncMock(return_value=found)
+    mock_target.async_backfill_new_events = AsyncMock(return_value=set())
     entry.runtime_data = mock_target
 
     scheduler = hass.data[DOMAIN]["reminder_scheduler"]
     scheduler.async_schedule = AsyncMock()
 
-    await _fire_poll(hass, freezer, 60)
+    # First poll only establishes the baseline (is_first_poll gates off
+    # notifications entirely) -- the series itself only appears afterward.
+    anchor = _poll_anchor()
+    await _fire_poll(hass, freezer, anchor, 60)
+    mock_target.async_backfill_new_events = AsyncMock(return_value=found)
+
+    await _fire_poll(hass, freezer, anchor, 120)
 
     assert scheduler.async_schedule.call_count == 3

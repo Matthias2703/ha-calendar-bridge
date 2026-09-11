@@ -962,7 +962,11 @@ async def test_poll_series_patches_the_master_once_not_each_instance():
     target = _make_target()
     instances = [
         _google_event(
-            f"evt{i}", "Standup", ical_uuid=f"uid-{i}", recurring_event_id="M", use_default_reminder=True
+            f"evt{i}",
+            "Standup",
+            ical_uuid=f"uid-{i}",
+            recurring_event_id="M",
+            use_default_reminder=True,
         )
         for i in range(1, 4)
     ]
