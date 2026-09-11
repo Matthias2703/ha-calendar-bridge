@@ -33,7 +33,7 @@ from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
 
 from .const import DOMAIN
-from .target import SeenEvent, compute_reminder_fire_at, event_has_started
+from .target import SeenEvent, as_utc, compute_reminder_fire_at, event_has_started
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -64,19 +64,17 @@ MAX_SEND_ATTEMPTS = 3
 
 
 class _ReminderStore(Store[dict[str, Any]]):
-    """Adds the v1 -> v2 migration (Paket A1) to the plain `Store`."""
+    """Adds the v1 -> v2 store-format migration to the plain `Store`."""
 
-    # `Store._async_load_data` (storage.py) introspects the override's own
-    # parameter count and calls it with either 2 args (version, data) or 3
-    # (major, minor, data) -- both are a supported override shape at
-    # runtime, but mypy only accepts the 3-arg base signature here.
-    async def _async_migrate_func(  # type: ignore[override]
-        self, old_major_version: int, old_data: dict[str, Any]
+    async def _async_migrate_func(
+        self, old_major_version: int, old_minor_version: int, old_data: dict[str, Any]
     ) -> dict[str, Any]:
-        """Discard every pre-Paket-A1 entry -- none of them has a calendar/instance association.
+        """Discard every pre-v2 entry -- none of them has a calendar/instance association.
 
-        Old entries also carry no `subentry_id`/`instance_key`/`source`, so
-        there is nothing meaningful to convert (decision I). A calendar
+        `old_minor_version` is unused: this store has never had more than
+        one minor revision within major version 1, so there's nothing to
+        distinguish. Old entries also carry no `subentry_id`/`instance_key`/
+        `source`, so there is nothing meaningful to convert. A calendar
         notification is simply replanned by the next poll; an explicit
         `create_event(notify)` reminder from before this update is lost --
         documented in README.md. Logs only a count, never the discarded
@@ -91,11 +89,17 @@ class _ReminderStore(Store[dict[str, Any]]):
                 "the next poll; an explicit create_event notification cannot be recovered",
                 discarded,
             )
-        # Consumed by the first `async_reconcile_calendar` call after this
-        # migration (see `async_load`/`_consume_migration_flag`) so it marks
-        # already-overdue calendar entries as sent rather than sending them
-        # a second time for something v1 may already have delivered.
-        return {"reminders": [], "migrated_from_v1": True}
+        # Consumed once per calendar (entry_id/subentry_id), not once for the
+        # whole store -- every calendar polled after the upgrade is just as
+        # likely to have a pending v1 send in flight as whichever one
+        # happens to poll first. `migrated_from_v1_at` bounds how long that
+        # protection lasts (see `async_reconcile_calendar`'s own handling)
+        # so a calendar added long after the upgrade doesn't still get it.
+        return {
+            "reminders": [],
+            "migrated_from_v1_at": dt_util.utcnow().isoformat(),
+            "migrated_calendars": [],
+        }
 
 
 def _parse_event_start(raw: str) -> datetime | date:
@@ -109,6 +113,19 @@ def _parse_event_start(raw: str) -> datetime | date:
 
 
 def _serialize_event_start(start: datetime | date) -> str:
+    """Normalize before storing: a naive `start` is interpreted as HA's own zone.
+
+    Every `event_start` in the store must be directly comparable (`==`/`!=`)
+    against a real backend's own (always tz-aware) `SeenEvent.start` without
+    a naive-vs-aware mismatch reporting a false "moved" -- or, worse,
+    crashing an aware/naive comparison elsewhere (e.g. `_prune`'s own age
+    check). `spec.start` from `create_event` can be naive (`cv.datetime`
+    yields one when the caller's string has no UTC offset); this is the one
+    place that normalization needs to happen, since every write to
+    `event_start` goes through here.
+    """
+    if isinstance(start, datetime):
+        return as_utc(start).isoformat()
     return start.isoformat()
 
 
@@ -135,6 +152,13 @@ class ReminderScheduler:
         # caller, so a timer firing at the same moment a poll reconciles the
         # same entry can never both send.
         self._sending: set[str] = set()
+        # Reminder ids with an already-registered `async_at_started`
+        # callback (unlike `_schedule`'s timers, HA gives no handle to
+        # cancel/query one of these) -- lets `_ensure_live_schedule` stay
+        # idempotent when called more than once for the same reminder (once
+        # from `async_load` at HA startup, again from `async_resume_entry`
+        # when a config entry reloads), so it never registers a duplicate.
+        self._pending_send_when_started: set[str] = set()
 
     def pending_count(self, entry_id: str) -> int:
         """How many HA-notification reminders are scheduled for this entry (for diagnostics)."""
@@ -163,36 +187,79 @@ class ReminderScheduler:
         is dropped.
         """
         loaded = await self._store.async_load()
-        self._data = loaded if loaded is not None else {"reminders": [], "migrated_from_v1": False}
+        self._data = loaded if loaded is not None else {"reminders": []}
 
         now = dt_util.utcnow()
         reminders: list[dict[str, Any]] = self._data.setdefault("reminders", [])
-        kept: list[dict[str, Any]] = []
-        for reminder in reminders:
-            if reminder.get("sent"):
-                kept.append(reminder)
-                continue
-            fire_at = dt_util.parse_datetime(reminder["fire_at"])
-            if fire_at is None:
-                continue
-            try:
-                event_start = _parse_event_start(reminder["event_start"])
-            except ValueError:
-                continue
-            if event_has_started(event_start, now):
-                continue
-            kept.append(reminder)
-            if fire_at > now:
-                self._schedule(reminder, fire_at)
-            else:
-                self._async_send_when_started(reminder)
+        kept = [r for r in reminders if self._ensure_live_schedule(r, now)]
 
         if kept != reminders:
             self._data["reminders"] = kept
             await self._store.async_save(self._data)
 
+    async def async_resume_entry(self, entry_id: str) -> None:
+        """Re-establish live scheduling for one entry's reminders after a reload.
+
+        `async_unload_entry` cancels this entry's in-memory timers (the old
+        runtime_data/listeners are about to be torn down along with it), but
+        the reminders themselves stay in the store -- a reauth or an
+        options-driven reload must not silently strand a still-pending
+        explicit reminder (or a calendar-sourced one, ahead of the next
+        poll) with no live timer to ever fire it again. Idempotent, same as
+        `async_load`, so calling it redundantly (e.g. once more right after
+        the very first `async_load` at HA startup, for every entry) never
+        registers a duplicate timer/callback for an already-scheduled one.
+        """
+        async with self._lock:
+            now = dt_util.utcnow()
+            reminders = self._data.setdefault("reminders", [])
+            kept = [
+                r
+                for r in reminders
+                if r["entry_id"] != entry_id or self._ensure_live_schedule(r, now)
+            ]
+            if kept != reminders:
+                self._data["reminders"] = kept
+                await self._store.async_save(self._data)
+
+    def _ensure_live_schedule(self, reminder: dict[str, Any], now: datetime) -> bool:
+        """Give one not-yet-sent reminder a live timer/callback; return False to drop it.
+
+        Mirrors the pre-Paket-A1 semantics for a reminder overdue at startup
+        (decision 5): `sent=True` needs no timer at all; a future `fire_at`
+        gets a real timer; an overdue one whose event hasn't started yet is
+        sent once HA finishes starting (not synchronously here -- a notify
+        target is often not loaded yet this early, and a raised exception
+        must never abort setup); one whose event has already started is
+        dropped. Safe to call more than once for the same reminder -- it
+        never registers a second timer/callback for one that already has
+        one live.
+        """
+        if reminder.get("sent"):
+            return True
+        fire_at = dt_util.parse_datetime(reminder["fire_at"])
+        if fire_at is None:
+            return False
+        try:
+            event_start = _parse_event_start(reminder["event_start"])
+        except ValueError:
+            return False
+        if event_has_started(event_start, now):
+            return False
+        if reminder["id"] in self._unsub or reminder["id"] in self._pending_send_when_started:
+            return True  # already has a live timer/callback -- don't duplicate it
+        if fire_at > now:
+            self._schedule(reminder, fire_at)
+        else:
+            self._async_send_when_started(reminder)
+        return True
+
     def _async_send_when_started(self, reminder: dict[str, Any]) -> None:
+        reminder_id = reminder["id"]
+        self._pending_send_when_started.add(reminder_id)
+
         async def _send(_hass: HomeAssistant) -> None:
+            self._pending_send_when_started.discard(reminder_id)
             async with self._lock:
                 await self._send_now(reminder)
 
@@ -257,9 +324,7 @@ class ReminderScheduler:
         async with self._lock:
             now = dt_util.utcnow()
             self._prune(entry_id, subentry_id, now)
-            migrated = bool(self._data.get("migrated_from_v1"))
-            if migrated:
-                self._data["migrated_from_v1"] = False
+            migrated = self._consume_migration_adoption(entry_id, subentry_id, now)
 
             real_by_key = {ev.instance_key: ev for ev in real_events}
             poll_window_end = now + lookahead
@@ -297,6 +362,30 @@ class ReminderScheduler:
         to_drop = [r for r in self._entries_for(entry_id, subentry_id) if _stale(r)]
         for reminder in to_drop:
             self._discard(reminder)
+
+    def _consume_migration_adoption(self, entry_id: str, subentry_id: str, now: datetime) -> bool:
+        """Whether *this* calendar's reconciliation should adopt overdue entries as sent.
+
+        The v1->v2 migration flag lives once on the whole store, but the
+        adoption behavior must protect every calendar's own first
+        reconciliation after the upgrade -- not just whichever one happens
+        to poll first (a global once-only flag would leave every calendar
+        after the first unprotected). Bounded by `PLANNING_WINDOW` from the
+        migration itself so a calendar added long after the upgrade never
+        gets it.
+        """
+        migrated_at_raw = self._data.get("migrated_from_v1_at")
+        if not migrated_at_raw:
+            return False
+        migrated_at = dt_util.parse_datetime(migrated_at_raw)
+        if migrated_at is None or now - migrated_at > PLANNING_WINDOW:
+            return False
+        calendar_key = f"{entry_id}/{subentry_id}"
+        adopted: list[str] = self._data.setdefault("migrated_calendars", [])
+        if calendar_key in adopted:
+            return False
+        adopted.append(calendar_key)
+        return True
 
     async def _reconcile_explicit(
         self,
@@ -494,6 +583,17 @@ class ReminderScheduler:
 
         Guarded by `_sending` (checked and marked with no `await` in
         between) so the two can never both deliver the same reminder.
+
+        Always called while `self._lock` is held -- but a real `notify`
+        service call under `blocking=True` has no timeout, so the lock is
+        released for just that one call (reacquired again immediately
+        after) instead of held for its whole, potentially unbounded,
+        duration. Every other calendar's reconciliation and every explicit
+        `create_event(notify)` call would otherwise stall behind whichever
+        single notify integration happens to be slow or hanging. Since the
+        entry can be discarded by another reconciliation while the lock is
+        released, its continued presence in the store is re-checked before
+        writing back the result.
         """
         reminder_id = reminder["id"]
         if reminder_id in self._sending or reminder.get("sent"):
@@ -507,6 +607,8 @@ class ReminderScheduler:
                 _LOGGER.warning("Notify target is unavailable; not sending a reminder")
                 await self._record_failed_attempt(reminder)
                 return
+
+            self._lock.release()
             try:
                 await self._hass.services.async_call(
                     "notify",
@@ -516,6 +618,17 @@ class ReminderScheduler:
                 )
             except Exception:  # noqa: BLE001 -- a failed send must never abort setup/scheduling
                 _LOGGER.warning("Failed to send a reminder notification", exc_info=True)
+                send_ok = False
+            else:
+                send_ok = True
+            finally:
+                await self._lock.acquire()
+
+            if reminder_id not in {r["id"] for r in self._data["reminders"]}:
+                # Discarded by a concurrent reconciliation while the lock
+                # was released for the send above -- nothing to write back.
+                return
+            if not send_ok:
                 await self._record_failed_attempt(reminder)
                 return
             reminder["sent"] = True

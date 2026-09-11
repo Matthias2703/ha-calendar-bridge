@@ -369,6 +369,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: CalendarBridgeConfigEntr
 
     entry.async_on_unload(entry.add_update_listener(_async_handle_entry_updated))
 
+    # `async_unload_entry` cancels this entry's live timers on every unload
+    # (including a reload's own unload half) -- re-establish them here so a
+    # reauth or an options-driven reload doesn't silently strand a
+    # still-pending reminder with nothing left to ever fire it.
+    scheduler: ReminderScheduler = hass.data[DOMAIN]["reminder_scheduler"]
+    await scheduler.async_resume_entry(entry.entry_id)
+
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     return True
 
