@@ -12,6 +12,7 @@ import pytest
 from gcal_sync.exceptions import ApiException
 from gcal_sync.model import DateOrDatetime, Reminders
 from gcal_sync.model import Event as GoogleEvent
+from homeassistant.util import dt as dt_util
 
 from custom_components.calendar_bridge.google_target import GoogleCalendarTarget
 from custom_components.calendar_bridge.target import (
@@ -44,19 +45,35 @@ def _google_event(
     *,
     ical_uuid: str | None = None,
     has_reminder: bool = False,
+    use_default_reminder: bool = False,
+    explicit_no_reminder: bool = False,
     all_day: bool = False,
+    start_dt: datetime | date | None = None,
+    recurring_event_id: str | None = None,
+    recurrence: list[str] | None = None,
 ) -> GoogleEvent:
-    if all_day:
+    if start_dt is not None:
+        is_all_day = not isinstance(start_dt, datetime)
+        start = DateOrDatetime(date=start_dt) if is_all_day else DateOrDatetime(dateTime=start_dt)
+        end_dt = start_dt + (timedelta(days=1) if is_all_day else timedelta(hours=1))
+        end = DateOrDatetime(date=end_dt) if is_all_day else DateOrDatetime(dateTime=end_dt)
+    elif all_day:
         start = DateOrDatetime(date=date(2026, 9, 10))
         end = DateOrDatetime(date=date(2026, 9, 11))
     else:
         start = DateOrDatetime(dateTime=datetime(2026, 9, 10, 14, 0, tzinfo=UTC))
         end = DateOrDatetime(dateTime=datetime(2026, 9, 10, 15, 0, tzinfo=UTC))
-    reminders = (
-        Reminders(useDefault=False, overrides=[{"method": "popup", "minutes": 30}])
-        if has_reminder
-        else None
-    )
+    if has_reminder:
+        reminders = Reminders(useDefault=False, overrides=[{"method": "popup", "minutes": 30}])
+    elif use_default_reminder:
+        reminders = Reminders(useDefault=True, overrides=[])
+    elif explicit_no_reminder:
+        # useDefault=false with an empty overrides list: an explicit "no
+        # reminder at all", distinct from useDefault=true/missing (which
+        # defers to the calendar's own default reminders).
+        reminders = Reminders(useDefault=False, overrides=[])
+    else:
+        reminders = None
     return GoogleEvent(
         id=event_id,
         iCalUID=ical_uuid or event_id,
@@ -64,6 +81,8 @@ def _google_event(
         start=start,
         end=end,
         reminders=reminders,
+        recurringEventId=recurring_event_id,
+        recurrence=recurrence or [],
     )
 
 
@@ -87,7 +106,26 @@ class _FakeService:
         self.async_get_event = AsyncMock(return_value=get_event)
 
 
+def _auth_default_reminders(
+    reminders: list[dict[str, Any]] | None = (), *, raises: bool = False
+) -> AsyncMock:
+    """A fake auth whose get_json() resolves a calendarList.get lookup.
+
+    Defaults to an empty list (the common case pre-existing tests rely on:
+    an event with no explicit override needs the calendar's own default
+    reminders to be empty in order to still count as reminder-less).
+    """
+    auth = AsyncMock()
+    if raises:
+        auth.get_json = AsyncMock(side_effect=ApiException("boom"))
+    else:
+        auth.get_json = AsyncMock(return_value={"defaultReminders": list(reminders or [])})
+    return auth
+
+
 def _patched(target: GoogleCalendarTarget, service: _FakeService, auth: Any = None):
+    if auth is None:
+        auth = _auth_default_reminders([])
     return patch.object(target, "_async_service", AsyncMock(return_value=(service, auth)))
 
 
@@ -694,3 +732,221 @@ async def test_instance_lookup_uses_a_wide_search_window_around_the_original_tim
     params = instances_call.kwargs["params"]
     window = datetime.fromisoformat(params["timeMax"]) - datetime.fromisoformat(params["timeMin"])
     assert window >= timedelta(days=180)
+
+
+# --- D2: exact-match backfill candidates + useDefault reminders (R2-01/R2-06) ---
+
+
+@pytest.fixture
+def europe_berlin_timezone():
+    original = dt_util.get_default_time_zone()
+    dt_util.set_default_time_zone(dt_util.get_time_zone("Europe/Berlin"))
+    yield
+    dt_util.set_default_time_zone(original)
+
+
+@pytest.mark.asyncio
+async def test_backfill_reminder_matches_exact_start_not_first_returned_event():
+    # events.list order is unspecified -- listing the 09:30 decoy first forces
+    # a "first summary match wins" bug to patch the wrong event deterministically.
+    target = _make_target()
+    early = _google_event("evt-early", "Arzt", start_dt=datetime(2026, 10, 1, 9, 30, tzinfo=UTC))
+    late = _google_event("evt-late", "Arzt", start_dt=datetime(2026, 10, 1, 10, 0, tzinfo=UTC))
+    service = _FakeService([early, late])
+
+    with _patched(target, service):
+        patched = await target.async_backfill_reminder(
+            _CALENDAR_REF, "Arzt", datetime(2026, 10, 1, 10, 0, tzinfo=UTC), 30, "popup"
+        )
+
+    assert patched is True
+    service.async_patch_event.assert_awaited_once()
+    assert service.async_patch_event.call_args[0][1] == "evt-late"
+
+
+@pytest.mark.asyncio
+async def test_backfill_reminder_two_exact_matches_does_not_patch():
+    target = _make_target()
+    start = datetime(2026, 10, 1, 10, 0, tzinfo=UTC)
+    e1 = _google_event("evt1", "Arzt", start_dt=start)
+    e2 = _google_event("evt2", "Arzt", start_dt=start)
+    service = _FakeService([e1, e2])
+
+    with _patched(target, service):
+        patched = await target.async_backfill_reminder(_CALENDAR_REF, "Arzt", start, 30, "popup")
+        dry = await target.async_backfill_reminder(
+            _CALENDAR_REF, "Arzt", start, 30, "popup", dry_run=True
+        )
+
+    assert patched is False
+    assert dry is False
+    service.async_patch_event.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_backfill_reminder_ignores_a_series_instance():
+    target = _make_target()
+    start = datetime(2026, 10, 1, 10, 0, tzinfo=UTC)
+    instance = _google_event("evt1", "Standup", start_dt=start, recurring_event_id="series-master")
+    service = _FakeService([instance])
+
+    with _patched(target, service):
+        patched = await target.async_backfill_reminder(_CALENDAR_REF, "Standup", start, 30, "popup")
+
+    assert patched is False
+    service.async_patch_event.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_backfill_reminder_all_day_matches_date_not_a_timed_event_same_day():
+    target = _make_target()
+    all_day = _google_event("evt-allday", "Feiertag", start_dt=date(2026, 10, 1))
+    # Same summary, inside the +/-1h-of-midnight search window -- must never
+    # be mistaken for the all-day event being backfilled.
+    timed_decoy = _google_event(
+        "evt-timed", "Feiertag", start_dt=datetime(2026, 10, 1, 0, 30, tzinfo=UTC)
+    )
+    service = _FakeService([timed_decoy, all_day])
+
+    with _patched(target, service):
+        patched = await target.async_backfill_reminder(
+            _CALENDAR_REF, "Feiertag", date(2026, 10, 1), 30, "popup"
+        )
+
+    assert patched is True
+    assert service.async_patch_event.call_args[0][1] == "evt-allday"
+
+
+@pytest.mark.asyncio
+async def test_backfill_reminder_naive_input_interpreted_in_ha_timezone(europe_berlin_timezone):
+    target = _make_target()
+    event = _google_event("evt1", "Arzt", start_dt=datetime(2026, 10, 1, 8, 0, tzinfo=UTC))
+    service = _FakeService([event])
+
+    with _patched(target, service):
+        # Naive -- 10:00 Europe/Berlin (CEST, UTC+2) == 08:00 UTC.
+        patched = await target.async_backfill_reminder(
+            _CALENDAR_REF, "Arzt", datetime(2026, 10, 1, 10, 0), 30, "popup"
+        )
+
+    assert patched is True
+
+
+@pytest.mark.asyncio
+async def test_backfill_reminder_use_default_with_nonempty_calendar_defaults_is_not_patched():
+    target = _make_target()
+    start = datetime(2026, 10, 1, 10, 0, tzinfo=UTC)
+    event = _google_event("evt1", "Arzt", start_dt=start, use_default_reminder=True)
+    service = _FakeService([event])
+    auth = _auth_default_reminders([{"method": "popup", "minutes": 10}])
+
+    with _patched(target, service, auth):
+        patched = await target.async_backfill_reminder(_CALENDAR_REF, "Arzt", start, 30, "popup")
+
+    assert patched is False
+    service.async_patch_event.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_poll_use_default_with_nonempty_calendar_defaults_is_not_patched():
+    target = _make_target()
+    event = _google_event("evt1", "Arzt", ical_uuid="uid-1", use_default_reminder=True)
+    service = _FakeService([event])
+    auth = _auth_default_reminders([{"method": "popup", "minutes": 10}])
+
+    with _patched(target, service, auth):
+        seen = await target.async_backfill_new_events(
+            _CALENDAR_REF, set(), 30, "popup", _LOOKAHEAD, False
+        )
+
+    assert seen is not None
+    assert {e.uid for e in seen} == {"evt1"}
+    service.async_patch_event.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_poll_use_default_with_empty_calendar_defaults_is_patched():
+    target = _make_target()
+    event = _google_event("evt1", "Arzt", ical_uuid="uid-1", use_default_reminder=True)
+    service = _FakeService([event])
+    auth = _auth_default_reminders([])
+
+    with _patched(target, service, auth):
+        seen = await target.async_backfill_new_events(
+            _CALENDAR_REF, set(), 30, "popup", _LOOKAHEAD, False
+        )
+
+    assert seen is not None
+    service.async_patch_event.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_backfill_reminder_default_reminders_lookup_failure_does_not_patch():
+    target = _make_target()
+    start = datetime(2026, 10, 1, 10, 0, tzinfo=UTC)
+    event = _google_event("evt1", "Arzt", start_dt=start, use_default_reminder=True)
+    service = _FakeService([event])
+    auth = _auth_default_reminders(raises=True)
+
+    with _patched(target, service, auth):
+        patched = await target.async_backfill_reminder(_CALENDAR_REF, "Arzt", start, 30, "popup")
+
+    assert patched is False
+    service.async_patch_event.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_poll_default_reminders_lookup_failure_skips_only_that_events_patch():
+    # Must not propagate as an ApiException (which would make the whole poll
+    # return None and lose every other event's seen-baseline update) and must
+    # not abort collecting/returning `seen`.
+    target = _make_target()
+    event = _google_event("evt1", "Arzt", ical_uuid="uid-1", use_default_reminder=True)
+    service = _FakeService([event])
+    auth = _auth_default_reminders(raises=True)
+
+    with _patched(target, service, auth):
+        seen = await target.async_backfill_new_events(
+            _CALENDAR_REF, set(), 30, "popup", _LOOKAHEAD, False
+        )
+
+    assert seen is not None
+    assert {e.uid for e in seen} == {"evt1"}
+    service.async_patch_event.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_backfill_reminder_explicit_no_reminder_is_patched_without_calendar_lookup():
+    # useDefault=false with an empty overrides list is an explicit "no
+    # reminder at all" -- it must be treated as patchable on its own, without
+    # ever consulting the calendar's default reminders (even non-empty ones).
+    target = _make_target()
+    start = datetime(2026, 10, 1, 10, 0, tzinfo=UTC)
+    event = _google_event("evt1", "Arzt", start_dt=start, explicit_no_reminder=True)
+    service = _FakeService([event])
+    auth = _auth_default_reminders([{"method": "popup", "minutes": 10}])
+
+    with _patched(target, service, auth):
+        patched = await target.async_backfill_reminder(_CALENDAR_REF, "Arzt", start, 30, "popup")
+
+    assert patched is True
+    service.async_patch_event.assert_awaited_once()
+    auth.get_json.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_poll_explicit_no_reminder_is_patched_without_calendar_lookup():
+    target = _make_target()
+    event = _google_event("evt1", "Arzt", ical_uuid="uid-1", explicit_no_reminder=True)
+    service = _FakeService([event])
+    auth = _auth_default_reminders([{"method": "popup", "minutes": 10}])
+
+    with _patched(target, service, auth):
+        seen = await target.async_backfill_new_events(
+            _CALENDAR_REF, set(), 30, "popup", _LOOKAHEAD, False
+        )
+
+    assert seen is not None
+    assert {e.uid for e in seen} == {"evt1"}
+    service.async_patch_event.assert_awaited_once()
+    auth.get_json.assert_not_called()

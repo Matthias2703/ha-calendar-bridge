@@ -10,6 +10,7 @@ from zoneinfo import ZoneInfo
 import caldav
 import icalendar
 import pytest
+from homeassistant.util import dt as dt_util
 
 from custom_components.calendar_bridge.caldav_target import (
     CalDavAuthError,
@@ -655,11 +656,15 @@ async def test_backfill_reminder_dry_run_does_not_save():
 
 
 @pytest.mark.asyncio
-async def test_backfill_reminder_does_not_destroy_the_series_rrule():
-    # `date_search` expands a recurring event client-side into a flattened,
-    # RRULE-less copy -- mutating and saving *that* object would permanently
-    # destroy the series on the server. The backfill must re-fetch the real,
-    # unexpanded event (via `event_by_uid`) before writing anything.
+async def test_backfill_reminder_never_patches_a_series_instance():
+    # Changed by D2 (R3-01 addendum): `date_search` returns a flattened,
+    # RRULE-less expansion of any recurring series overlapping the window --
+    # matching one used to backfill the *master*'s VALARM (safely, without
+    # destroying its RRULE, which this test previously asserted). But
+    # calendar.create_event never creates a series, so a genuine reactive
+    # candidate can never legitimately be one either -- the real fix is to
+    # never treat a series instance as a match at all, not just to patch it
+    # without corrupting it.
     target = _make_target()
     calendar_ref = "https://example.test/cal/"
     mock_client, mock_calendar = _mock_client_with_calendar(calendar_ref)
@@ -679,17 +684,10 @@ async def test_backfill_reminder_does_not_destroy_the_series_rrule():
             calendar_ref, "Standup", datetime(2026, 10, 15, 9, 0, tzinfo=UTC), 30, "popup"
         )
 
-    assert patched is True
-    mock_calendar.event_by_uid.assert_called_once_with("series-1")
-    # The real (unexpanded, still-recurring) object was saved -- not the
-    # flattened search-result object.
-    real_event.save.assert_called_once()
+    assert patched is False
+    real_event.save.assert_not_called()
     expanded_event.save.assert_not_called()
-    master = real_event.icalendar_component
-    assert "RRULE" in master
-    alarms = list(master.walk("VALARM"))
-    assert len(alarms) == 1
-    assert str(alarms[0]["action"]) == "DISPLAY"
+    assert not list(real_event.icalendar_component.walk("VALARM"))
 
 
 @pytest.mark.asyncio
@@ -1245,3 +1243,123 @@ async def test_create_event_propagates_a_plain_connection_error():
         pytest.raises(CalDavConnectionError),
     ):
         await target.async_create_event("https://example.test/cal/", spec)
+
+
+# --- D2: exact-match backfill candidates (R3-01) ---
+
+
+@pytest.fixture
+def europe_berlin_timezone():
+    original = dt_util.get_default_time_zone()
+    dt_util.set_default_time_zone(dt_util.get_time_zone("Europe/Berlin"))
+    yield
+    dt_util.set_default_time_zone(original)
+
+
+@pytest.mark.asyncio
+async def test_backfill_reminder_matches_exact_start_not_first_returned_event():
+    # date_search's own event order isn't a matching signal -- listing the
+    # 09:30 decoy first forces a "first summary match wins" bug to patch the
+    # wrong event deterministically.
+    target = _make_target()
+    calendar_ref = "https://example.test/cal/"
+    mock_client, mock_calendar = _mock_client_with_calendar(calendar_ref)
+    early = _mock_caldav_event(
+        "Arzt", has_alarm=False, start=datetime(2026, 10, 1, 9, 30, tzinfo=UTC), uid="uid-early"
+    )
+    late = _mock_caldav_event(
+        "Arzt", has_alarm=False, start=datetime(2026, 10, 1, 10, 0, tzinfo=UTC), uid="uid-late"
+    )
+    mock_calendar.date_search.return_value = [early, late]
+    mock_calendar.event_by_uid.side_effect = lambda uid: {"uid-early": early, "uid-late": late}[uid]
+
+    with patch(
+        "custom_components.calendar_bridge.caldav_target.build_client", return_value=mock_client
+    ):
+        patched = await target.async_backfill_reminder(
+            calendar_ref, "Arzt", datetime(2026, 10, 1, 10, 0, tzinfo=UTC), 30, "popup"
+        )
+
+    assert patched is True
+    late.save.assert_called_once()
+    early.save.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_backfill_reminder_two_exact_matches_does_not_patch():
+    target = _make_target()
+    calendar_ref = "https://example.test/cal/"
+    mock_client, mock_calendar = _mock_client_with_calendar(calendar_ref)
+    start = datetime(2026, 10, 1, 10, 0, tzinfo=UTC)
+    e1 = _mock_caldav_event("Arzt", has_alarm=False, start=start, uid="uid-1")
+    e2 = _mock_caldav_event("Arzt", has_alarm=False, start=start, uid="uid-2")
+    mock_calendar.date_search.return_value = [e1, e2]
+    mock_calendar.event_by_uid.side_effect = lambda uid: {"uid-1": e1, "uid-2": e2}[uid]
+
+    with patch(
+        "custom_components.calendar_bridge.caldav_target.build_client", return_value=mock_client
+    ):
+        patched = await target.async_backfill_reminder(calendar_ref, "Arzt", start, 30, "popup")
+        dry = await target.async_backfill_reminder(
+            calendar_ref, "Arzt", start, 30, "popup", dry_run=True
+        )
+
+    assert patched is False
+    assert dry is False
+    e1.save.assert_not_called()
+    e2.save.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_backfill_reminder_matches_across_utc_tzid_and_floating_dtstart(
+    europe_berlin_timezone,
+):
+    # Same instant (2026-10-01 10:00 Europe/Berlin == 08:00 UTC), expressed
+    # three different ways as the event's own DTSTART.
+    target = _make_target()
+    calendar_ref = "https://example.test/cal/"
+    representations = {
+        "utc": datetime(2026, 10, 1, 8, 0, tzinfo=UTC),
+        "tzid": datetime(2026, 10, 1, 10, 0, tzinfo=ZoneInfo("Europe/Berlin")),
+        "floating": datetime(2026, 10, 1, 10, 0),
+    }
+    for label, event_dtstart in representations.items():
+        mock_client, mock_calendar = _mock_client_with_calendar(calendar_ref)
+        event = _mock_caldav_event("Arzt", has_alarm=False, start=event_dtstart, uid=f"uid-{label}")
+        mock_calendar.date_search.return_value = [event]
+        mock_calendar.event_by_uid.return_value = event
+
+        with patch(
+            "custom_components.calendar_bridge.caldav_target.build_client",
+            return_value=mock_client,
+        ):
+            patched = await target.async_backfill_reminder(
+                calendar_ref, "Arzt", datetime(2026, 10, 1, 8, 0, tzinfo=UTC), 30, "popup"
+            )
+
+        assert patched is True, f"{label} DTSTART should have matched"
+        event.save.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_backfill_reminder_does_not_match_a_different_instant(europe_berlin_timezone):
+    target = _make_target()
+    calendar_ref = "https://example.test/cal/"
+    mock_client, mock_calendar = _mock_client_with_calendar(calendar_ref)
+    # Floats at 11:00 Europe/Berlin (09:00 UTC) -- request is for 10:00
+    # Europe/Berlin (08:00 UTC). Same summary, wrong instant.
+    event = _mock_caldav_event(
+        "Arzt", has_alarm=False, start=datetime(2026, 10, 1, 11, 0), uid="uid-1"
+    )
+    mock_calendar.date_search.return_value = [event]
+    mock_calendar.event_by_uid.return_value = event
+
+    with patch(
+        "custom_components.calendar_bridge.caldav_target.build_client", return_value=mock_client
+    ):
+        patched = await target.async_backfill_reminder(
+            calendar_ref, "Arzt", datetime(2026, 10, 1, 10, 0, tzinfo=UTC), 30, "popup"
+        )
+
+    assert patched is False
+    event.save.assert_not_called()
