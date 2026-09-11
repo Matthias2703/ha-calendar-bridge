@@ -33,7 +33,13 @@ from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
 
 from .const import DOMAIN
-from .target import SeenEvent, as_utc, compute_reminder_fire_at, event_has_started
+from .target import (
+    SeenEvent,
+    as_utc,
+    compute_reminder_fire_at,
+    event_has_started,
+    series_instance_key,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -61,6 +67,16 @@ _PRUNE_AGE = timedelta(days=1)
 # same cadence a calendar poll already runs at) naturally retries it via the
 # same "overdue, event not started" path, up to this cap.
 MAX_SEND_ATTEMPTS = 3
+
+# G3/A1D-02: how long to wait before retrying a failed send via its own
+# dedicated timer (`_record_failed_attempt`). Relying solely on "the next
+# periodic poll finds `fire_at` still due" (the pre-G3 behavior) never
+# actually retries a calendar-sourced entry outside its own PLANNING_WINDOW,
+# an explicit entry far outside the poll's own lookahead, or any entry when
+# the poll itself fails for unrelated reasons (a backend error skips
+# reconciliation for that cycle) -- a plain, independent timer closes all
+# three gaps at once. Matches the periodic poll's own cadence (~60s).
+RETRY_DELAY = timedelta(seconds=60)
 
 
 class _ReminderStore(Store[dict[str, Any]]):
@@ -275,8 +291,17 @@ class ReminderScheduler:
             if claimed is not None:
                 self._spawn_delivery(claimed)
 
+        # G2/R2: if HA is already running, `async_at_started` (HA 2026.3.4
+        # helpers/start.py, eager coroutine jobs per core.py) runs `_send`
+        # immediately, *before* returning here -- `_send` then pops
+        # `reminder_id` from `_pending_send_when_started` before this method
+        # ever gets a chance to put it there. A placeholder set first (and
+        # only overwritten if `_send` hasn't already removed it) closes that
+        # window instead of leaving a dead entry stuck here forever.
+        self._pending_send_when_started[reminder_id] = (lambda: None, reminder.get("entry_id", ""))
         cancel = async_at_started(self._hass, _send)
-        self._pending_send_when_started[reminder_id] = (cancel, reminder.get("entry_id", ""))
+        if reminder_id in self._pending_send_when_started:
+            self._pending_send_when_started[reminder_id] = (cancel, reminder.get("entry_id", ""))
 
     # -- Explicit (create_event notify) scheduling ---------------------------
 
@@ -503,29 +528,54 @@ class ReminderScheduler:
         real_by_key: dict[str, SeenEvent],
         claimed_keys: set[str],
     ) -> SeenEvent | None:
-        """A1-03: find the one real event this now-keyless explicit entry actually is.
+        """A1-03/G4 (A1D-01): find the one real event this now-keyless explicit entry actually is.
 
-        Matches on `series_uid` plus the entry's own normalized
-        `event_start` -- the instance-key *shape* changed (single <-> series
-        first instance), not the event itself. Only re-keys when exactly one
-        candidate matches and that candidate isn't already some other
-        explicit entry's own key; more than one candidate is genuinely
-        ambiguous and falls back to the existing missing/discard handling.
+        Matches by stable per-occurrence *identity* -- `series_uid` plus the
+        entry's own original RECURRENCE-ID/originalStartTime -- rather than
+        by "some real event with a matching *current* start". The latter
+        latches onto whichever instance happens to occupy that time right
+        now: if the very same poll that turns a bare single event into a
+        series also moves its own first instance elsewhere, while a
+        *different* instance of that series has separately been moved onto
+        the old single event's former time, a current-start match binds to
+        that unrelated other instance instead of the one this entry actually
+        is (Codex's own trap scenario).
+
+        The candidate key is deterministic, not searched for:
+        - stored key == `series_uid` (was a bare single event): the
+          candidate is `series_instance_key(series_uid, stored_start)` --
+          exactly the RECURRENCE-ID/originalStartTime a first instance keeps
+          even after being moved itself.
+        - stored key starts with `f"{series_uid}#"` (was a series instance):
+          the candidate is the bare `series_uid`, but only accepted if that
+          real event's own *current* start still matches what this entry
+          remembers -- there's no stable identity to match by in this
+          direction, only the previous best-effort check.
+        The candidate must be a real event this poll actually saw, and not
+        already some other explicit entry's own key.
         """
         try:
             stored_start = _parse_event_start(entry["event_start"])
         except ValueError:
             return None
-        candidates = [
-            ev
-            for key, ev in real_by_key.items()
-            if ev.series_uid == entry["series_uid"]
-            and ev.start == stored_start
-            and key not in claimed_keys
-        ]
-        if len(candidates) == 1:
-            return candidates[0]
-        return None
+        series_uid = entry["series_uid"]
+        stored_key = entry["instance_key"]
+        if stored_key == series_uid:
+            if not isinstance(stored_start, datetime):
+                return None
+            candidate_key = series_instance_key(series_uid, stored_start)
+        elif stored_key.startswith(f"{series_uid}#"):
+            candidate_key = series_uid
+        else:
+            return None
+        if candidate_key in claimed_keys:
+            return None
+        candidate = real_by_key.get(candidate_key)
+        if candidate is None:
+            return None
+        if candidate_key == series_uid and candidate.start != stored_start:
+            return None
+        return candidate
 
     async def _reconcile_calendar_entries(
         self,
@@ -822,9 +872,12 @@ class ReminderScheduler:
                         reminder_id, claimed_revision, send_ok=send_ok
                     )
         finally:
-            # Only clear our own claim -- `_finish_delivery`'s stale-revision
-            # path may already have re-claimed this same id under a new
-            # revision (`redo`), which must survive this delivery's cleanup.
+            # Usually a no-op: `_finish_delivery`'s stale-revision path (G1/
+            # R1) already released this exact claim itself before reclaiming
+            # -- clearing here again only matters if `_finish_delivery`
+            # returned early (entry discarded) without going through that
+            # path. Guarded by `claimed_revision` either way, so a `redo`
+            # claim placed under a new revision is never clobbered.
             if self._sending.get(reminder_id) == claimed_revision:
                 del self._sending[reminder_id]
         if redo is not None:
@@ -851,6 +904,14 @@ class ReminderScheduler:
                 return None
             current = next(r for r in self._data["reminders"] if r["id"] == reminder_id)
             if current.get("revision", 0) != claimed_revision:
+                # G1/R1: release this stale attempt's own claim *before*
+                # trying to reclaim -- `_claim_for_delivery` refuses an id
+                # already in `_sending`, so the reclaim below would
+                # otherwise always find itself still "owning" this entry and
+                # return None, leaving a due entry stranded until the next
+                # poll instead of redelivering right away.
+                if self._sending.get(reminder_id) == claimed_revision:
+                    del self._sending[reminder_id]
                 return self._reclaim_if_still_due(current, dt_util.utcnow())
             if not send_ok:
                 await self._record_failed_attempt(current)
@@ -869,13 +930,21 @@ class ReminderScheduler:
             )
             self._discard(reminder)
         else:
+            # G3/A1D-02: a dedicated retry timer, bound to this entry's
+            # current revision exactly like any other scheduled delivery
+            # (F1/A1-01) -- a poll that changes the entry in the meantime
+            # supersedes it the same way. Registered in `self._unsub`, so it
+            # composes for free with unload/purge/discard already cancelling
+            # anything found there, and with reconciliation's own "not
+            # already scheduled" checks (`entry["id"] not in self._unsub`)
+            # already refusing to start a second attempt while it lives.
+            # `fire_at` itself is left untouched -- it stays the entry's
+            # real, already-past due time, not this retry's own schedule.
             self._unschedule(reminder["id"])
-        # No dedicated retry timer -- the next periodic poll's reconciliation
-        # (~60s later) will find `fire_at` still due and try again through
-        # the same `_apply`/`_deliver` path, up to `MAX_SEND_ATTEMPTS`. Save
-        # unconditionally (both branches): a give-up that isn't persisted
-        # would resurrect itself and retry forever after a restart, exactly
-        # what this cap exists to prevent.
+            self._schedule(reminder, dt_util.utcnow() + RETRY_DELAY)
+        # Save unconditionally (both branches): a give-up that isn't
+        # persisted would resurrect itself and retry forever after a
+        # restart, exactly what this cap exists to prevent.
         await self._store.async_save(self._data)
 
     # -- Lifecycle hooks -------------------------------------------------------
