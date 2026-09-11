@@ -404,7 +404,13 @@ async def test_poll_seen_event_carries_summary_and_start():
         )
 
     assert seen == {
-        SeenEvent(uid="evt1", summary="Dentist", start=datetime(2026, 9, 10, 14, 0, tzinfo=UTC))
+        SeenEvent(
+            uid="evt1",
+            summary="Dentist",
+            start=datetime(2026, 9, 10, 14, 0, tzinfo=UTC),
+            instance_key="uid-1",
+            series_uid="uid-1",
+        )
     }
 
 
@@ -1055,7 +1061,7 @@ async def test_poll_series_instance_with_inherited_override_skips_master_lookup(
     service.async_patch_event.assert_not_awaited()
     master_entries = [s for s in seen if s.uid == "M"]
     assert len(master_entries) == 1
-    assert master_entries[0].suppress_notification is True
+    assert master_entries[0].is_marker is True
 
 
 @pytest.mark.asyncio
@@ -1139,7 +1145,7 @@ async def test_poll_series_each_instance_is_its_own_seen_event():
     assert {s.start for s in instance_seen} == set(starts)
     master_entries = [s for s in seen if s.uid == "M"]
     assert len(master_entries) == 1
-    assert master_entries[0].suppress_notification is True
+    assert master_entries[0].is_marker is True
 
 
 @pytest.mark.asyncio
@@ -1189,7 +1195,7 @@ async def test_poll_series_sibling_instance_known_skips_lookup_and_adds_master_b
     # (n) First poll after upgrade: only an old instance-id of M is known
     # (not the master-id itself). A new sibling instance must still skip the
     # master fetch/patch, and the returned set must carry the master's own
-    # baseline entry with suppress_notification=True.
+    # baseline entry with is_marker=True.
     target = _make_target()
     known_instance = _google_event(
         "evt-old", "Standup", ical_uuid="uid-old", recurring_event_id="M", use_default_reminder=True
@@ -1210,7 +1216,7 @@ async def test_poll_series_sibling_instance_known_skips_lookup_and_adds_master_b
     service.async_patch_event.assert_not_awaited()
     master_entries = [s for s in seen if s.uid == "M"]
     assert len(master_entries) == 1
-    assert master_entries[0].suppress_notification is True
+    assert master_entries[0].is_marker is True
 
 
 # --- B2: uid/occurrence resolution (update/delete) ---

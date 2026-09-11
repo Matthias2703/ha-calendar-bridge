@@ -519,7 +519,11 @@ async def test_poll_seen_event_carries_summary_and_start():
 
     seen = await _poll(target, calendar_ref, mock_calendar, known_uids=set())
 
-    assert seen == {SeenEvent(uid="uid-1", summary="Dentist", start=start)}
+    assert seen == {
+        SeenEvent(
+            uid="uid-1", summary="Dentist", start=start, instance_key="uid-1", series_uid="uid-1"
+        )
+    }
 
 
 @pytest.mark.asyncio
@@ -736,7 +740,11 @@ async def test_poll_single_event_key_is_the_uid():
 
     seen = await _poll(target, calendar_ref, mock_calendar, known_uids=set())
 
-    assert seen == {SeenEvent(uid="uid-1", summary="Dentist", start=start)}
+    assert seen == {
+        SeenEvent(
+            uid="uid-1", summary="Dentist", start=start, instance_key="uid-1", series_uid="uid-1"
+        )
+    }
 
 
 @pytest.mark.asyncio
@@ -765,17 +773,20 @@ async def test_poll_migrated_series_recognizes_stored_instance_outside_current_w
             uid=series_instance_key(uid, new_start),
             summary="Standup",
             start=new_start,
-            suppress_notification=False,
+            instance_key=series_instance_key(uid, new_start),
+            series_uid=uid,
         )
     }
     mock_calendar.event_by_uid.assert_not_called()
 
 
 @pytest.mark.asyncio
-async def test_poll_series_changed_to_single_is_silently_baselined():
+async def test_poll_series_changed_to_single_is_not_a_marker():
     # (q) A bare UID is unknown after a series first used the B1 instance-key
     # schema, but its persisted UID# key still proves that this resource was
-    # already known before the RRULE was removed.
+    # already known before the RRULE was removed -- the backfill still skips
+    # it (`series_already_known`), but it's a real event, not a marker
+    # (Paket A1, decision C): it's still eligible for a notification.
     target = _make_target()
     calendar_ref = "https://example.test/cal/"
     mock_calendar = MagicMock()
@@ -797,7 +808,8 @@ async def test_poll_series_changed_to_single_is_silently_baselined():
             uid=uid,
             summary="Standup",
             start=single_start,
-            suppress_notification=True,
+            instance_key=uid,
+            series_uid=uid,
         )
     }
     mock_calendar.event_by_uid.assert_not_called()

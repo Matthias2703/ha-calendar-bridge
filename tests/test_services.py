@@ -26,6 +26,7 @@ from custom_components.calendar_bridge.const import (
     CONF_CALENDAR_URL,
     DOMAIN,
 )
+from custom_components.calendar_bridge.reminder_scheduler import ReminderScheduler
 from custom_components.calendar_bridge.services import (
     _async_schedule_notification,
     async_handle_create_event,
@@ -386,18 +387,30 @@ def europe_berlin_timezone():
 
 
 @pytest.mark.asyncio
-async def test_create_event_notify_all_day_survives_dst_spring_forward(europe_berlin_timezone):
+async def test_create_event_notify_all_day_survives_dst_spring_forward(
+    europe_berlin_timezone, freezer
+):
     # (k) Same DST scenario as test_init.py's poller-path test
     # (test_all_day_notification_survives_dst_spring_forward), exercised
     # through services.py's own create_event-notify scheduling helper.
-    scheduler = MagicMock()
-    scheduler.async_schedule = AsyncMock()
+    # Frozen well before the event so the reconciliation `_apply` runs
+    # inside `async_schedule_explicit` schedules a timer instead of finding
+    # the event already started (which would discard it on the spot).
+    freezer.move_to(datetime(2026, 3, 1, tzinfo=UTC))
     hass = MagicMock()
+    with patch(
+        "custom_components.calendar_bridge.reminder_scheduler._ReminderStore"
+    ) as mock_store_cls:
+        mock_store = mock_store_cls.return_value
+        mock_store.async_load = AsyncMock(return_value={"reminders": []})
+        mock_store.async_save = AsyncMock()
+        scheduler = ReminderScheduler(hass)
     hass.data = {DOMAIN: {"reminder_scheduler": scheduler}}
     spec = EventSpec(summary="Geburtstag", start=date(2026, 3, 30), all_day=True)
     notify_data = {ATTR_NOTIFY_TARGET: "notify.phone", ATTR_MINUTES_BEFORE: 1441}
 
-    await _async_schedule_notification(hass, "entry-1", notify_data, spec)
+    with patch("custom_components.calendar_bridge.reminder_scheduler.async_track_point_in_time"):
+        await _async_schedule_notification(hass, "entry-1", "sub-1", "uid-1", notify_data, spec)
 
-    fire_at = scheduler.async_schedule.call_args[0][1]
+    fire_at = dt_util.parse_datetime(scheduler._data["reminders"][0]["fire_at"])
     assert fire_at == datetime(2026, 3, 28, 8, 0, tzinfo=UTC)
