@@ -149,7 +149,10 @@ def _auth_finding_instances(master_id: str, instance_items: list[dict[str, Any]]
     async def get_json(url: str, params: dict[str, Any] | None = None, **kwargs: Any):
         if "/instances" in url:
             return {"items": instance_items}
-        return {"items": [{"id": master_id}]}
+        # A `recurrence` field marks this as a real series master (see
+        # google_target.py's `_async_resolve_event`, B2-05) -- these tests
+        # are all about resolving an occurrence of an actual series.
+        return {"items": [{"id": master_id, "recurrence": ["RRULE:FREQ=DAILY"]}]}
 
     auth.get_json = AsyncMock(side_effect=get_json)
     return auth
@@ -186,7 +189,7 @@ def _auth_finding_instances_paged(master_id: str, pages: list[list[dict[str, Any
 
     async def get_json(url: str, params: dict[str, Any] | None = None, **kwargs: Any):
         if "/instances" not in url:
-            return {"items": [{"id": master_id}]}
+            return {"items": [{"id": master_id, "recurrence": ["RRULE:FREQ=DAILY"]}]}
         idx = state["page"]
         state["page"] += 1
         result: dict[str, Any] = {"items": pages[idx] if idx < len(pages) else []}

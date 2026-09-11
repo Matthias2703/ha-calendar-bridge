@@ -642,6 +642,13 @@ class GoogleCalendarTarget:
         item = await self._async_find_event(calendar_ref, auth, uid)
         if item is None or occurrence is None:
             return item
+        # A `recurrence` field (the RRULE/EXDATE/RDATE lines) is only present
+        # on a series' own master -- a genuinely single event has neither
+        # that nor a `recurringEventId` (already ruled out by
+        # `_async_find_event`), so it has no instances for events.instances
+        # to resolve.
+        if not item.get("recurrence"):
+            return None
         master_event_id = cast(str, item["id"])
         return await self._async_find_instance(calendar_ref, auth, master_event_id, occurrence)
 
