@@ -195,11 +195,23 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
             return
         data = event.data.get(ATTR_SERVICE_DATA) or {}
         summary = data.get("summary")
-        start_raw = data.get("start_date_time") or data.get("start_date")
-        if not summary or not start_raw:
-            return
-        start = dt_util.parse_datetime(start_raw) or dt_util.parse_date(start_raw)
-        if start is None:
+        # Decide the value type by *which* key is present, not by trying
+        # parse_datetime() first -- it happily (and wrongly) parses a bare
+        # "YYYY-MM-DD" into a midnight datetime instead of failing over to
+        # parse_date(). The raw service-call value can also already be a
+        # date/datetime object rather than a string.
+        start: datetime | date | None
+        if (start_date_time := data.get("start_date_time")) is not None:
+            start = (
+                start_date_time
+                if isinstance(start_date_time, datetime)
+                else dt_util.parse_datetime(start_date_time)
+            )
+        elif (start_date := data.get("start_date")) is not None:
+            start = start_date if isinstance(start_date, date) else dt_util.parse_date(start_date)
+        else:
+            start = None
+        if not summary or start is None:
             return
 
         for delay in _BACKFILL_RETRY_DELAYS:
