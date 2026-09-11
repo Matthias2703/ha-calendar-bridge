@@ -1418,3 +1418,168 @@ async def test_delete_event_with_occurrence_on_a_single_event_does_not_call_inst
     service.async_delete_event.assert_not_awaited()
     for call in auth.get_json.call_args_list:
         assert "/instances" not in call.args[0]
+
+
+# --- C: local time instead of UTC ---
+
+
+@pytest.mark.asyncio
+async def test_create_event_series_sets_local_datetime_and_timezone(europe_berlin_timezone):
+    # (a) A new recurring event's dateTime must be the local wall clock with
+    # its own UTC offset, and timeZone must be the IANA name of HA's
+    # configured zone -- Google requires timeZone to expand a series.
+    target = _make_target()
+    auth = AsyncMock()
+    auth.post_json.return_value = {"id": "abc123", "iCalUID": "abc123@google.com"}
+    service = _FakeService()
+
+    with _patched(target, service, auth):
+        await target.async_create_event(
+            _CALENDAR_REF,
+            EventSpec(
+                summary="Standup",
+                start=datetime(2026, 10, 1, 9, 0),
+                end=datetime(2026, 10, 1, 9, 30),
+                rrule="FREQ=WEEKLY",
+            ),
+        )
+
+    body = auth.post_json.call_args.kwargs["json"]
+    assert body["start"]["dateTime"] == "2026-10-01T09:00:00+02:00"
+    assert body["start"]["timeZone"] == "Europe/Berlin"
+    assert body["end"]["dateTime"] == "2026-10-01T09:30:00+02:00"
+    assert body["end"]["timeZone"] == "Europe/Berlin"
+
+
+@pytest.mark.asyncio
+async def test_create_event_single_also_sets_timezone(europe_berlin_timezone):
+    # (b) timeZone is set even for a non-recurring event -- one uniform code
+    # path instead of only setting it when a series is involved.
+    target = _make_target()
+    auth = AsyncMock()
+    auth.post_json.return_value = {"id": "abc123", "iCalUID": "abc123@google.com"}
+    service = _FakeService()
+
+    with _patched(target, service, auth):
+        await target.async_create_event(
+            _CALENDAR_REF,
+            EventSpec(summary="Dentist", start=datetime(2026, 10, 1, 9, 0)),
+        )
+
+    body = auth.post_json.call_args.kwargs["json"]
+    assert body["start"]["timeZone"] == "Europe/Berlin"
+    assert body["end"]["timeZone"] == "Europe/Berlin"
+
+
+@pytest.mark.asyncio
+async def test_create_event_tz_aware_input_converted_to_ha_zone(europe_berlin_timezone):
+    # (c) A tz-aware input (UTC) must be re-expressed in HA's own zone, not
+    # sent through as UTC.
+    target = _make_target()
+    auth = AsyncMock()
+    auth.post_json.return_value = {"id": "abc123", "iCalUID": "abc123@google.com"}
+    service = _FakeService()
+
+    with _patched(target, service, auth):
+        await target.async_create_event(
+            _CALENDAR_REF,
+            EventSpec(
+                summary="Standup",
+                start=datetime(2026, 10, 1, 7, 0, tzinfo=UTC),
+                end=datetime(2026, 10, 1, 7, 30, tzinfo=UTC),
+            ),
+        )
+
+    body = auth.post_json.call_args.kwargs["json"]
+    assert body["start"]["dateTime"] == "2026-10-01T09:00:00+02:00"
+    assert body["start"]["timeZone"] == "Europe/Berlin"
+
+
+@pytest.mark.asyncio
+async def test_update_event_uses_existing_timezone_not_ha_zone():
+    # (d) dateTime must be expressed in exactly the zone the body declares
+    # as timeZone -- here the event's own existing start.timeZone (America/
+    # New_York), never HA's own configured zone (ambient UTC in this test).
+    target = _make_target()
+    service = _FakeService()
+    item = {
+        "id": "evt1",
+        "iCalUID": "evt1",
+        "summary": "Standup",
+        "start": {"dateTime": "2026-10-02T09:00:00-04:00", "timeZone": "America/New_York"},
+        "end": {"dateTime": "2026-10-02T09:30:00-04:00", "timeZone": "America/New_York"},
+    }
+    auth = _auth_finding_item(item)
+
+    with _patched(target, service, auth):
+        updated = await target.async_update_event(
+            _CALENDAR_REF,
+            "uid-1",
+            EventUpdate(start=datetime(2026, 10, 2, 18, 0, tzinfo=UTC)),
+        )
+
+    assert updated is True
+    body = service.async_patch_event.call_args[0][2]
+    assert body["start"]["timeZone"] == "America/New_York"
+    # 18:00Z on 2026-10-02 is 14:00 EDT (-04:00, DST still in effect).
+    assert body["start"]["dateTime"] == "2026-10-02T14:00:00-04:00"
+
+
+@pytest.mark.asyncio
+async def test_update_event_adding_rrule_backfills_missing_timezone():
+    # (e) Adding an RRULE to a still-single event without a timeZone must
+    # also backfill start/end with one -- Google requires timeZone to
+    # expand a recurring event.
+    target = _make_target()
+    service = _FakeService()
+    item = {
+        "id": "evt1",
+        "iCalUID": "evt1",
+        "summary": "Standup",
+        "start": {"dateTime": "2026-10-01T09:00:00Z"},
+        "end": {"dateTime": "2026-10-01T09:30:00Z"},
+    }
+    auth = _auth_finding_item(item)
+
+    with _patched(target, service, auth):
+        updated = await target.async_update_event(
+            _CALENDAR_REF, "uid-1", EventUpdate(rrule="FREQ=WEEKLY")
+        )
+
+    assert updated is True
+    body = service.async_patch_event.call_args[0][2]
+    assert body["recurrence"] == ["RRULE:FREQ=WEEKLY"]
+    assert body["start"]["timeZone"] == "UTC"
+    assert body["end"]["timeZone"] == "UTC"
+
+
+@pytest.mark.asyncio
+async def test_update_event_switch_all_day_to_timed_sets_ha_zone(europe_berlin_timezone):
+    # (m) Switching all-day -> timed is treated like a new time value: HA's
+    # own zone, since an all-day event never had a timeZone to preserve.
+    target = _make_target()
+    service = _FakeService()
+    item = {
+        "id": "evt1",
+        "iCalUID": "evt1",
+        "summary": "Birthday",
+        "start": {"date": "2026-10-01"},
+        "end": {"date": "2026-10-02"},
+    }
+    auth = _auth_finding_item(item)
+
+    with _patched(target, service, auth):
+        updated = await target.async_update_event(
+            _CALENDAR_REF,
+            "uid-1",
+            EventUpdate(
+                all_day=False,
+                start=datetime(2026, 10, 1, 9, 0),
+                end=datetime(2026, 10, 1, 9, 30),
+            ),
+        )
+
+    assert updated is True
+    body = service.async_patch_event.call_args[0][2]
+    assert body["start"]["dateTime"] == "2026-10-01T09:00:00+02:00"
+    assert body["start"]["timeZone"] == "Europe/Berlin"

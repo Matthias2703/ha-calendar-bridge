@@ -10,6 +10,7 @@ from zoneinfo import ZoneInfo
 import caldav
 import icalendar
 import pytest
+import recurring_ical_events
 from homeassistant.util import dt as dt_util
 
 from custom_components.calendar_bridge.caldav_target import (
@@ -109,11 +110,15 @@ async def test_create_event_rediscovers_the_calendar_via_the_account_entry_point
 
 
 @pytest.mark.asyncio
-async def test_naive_start_is_normalized_to_utc_not_left_floating():
+async def test_naive_start_is_normalized_to_ha_zone_not_left_floating():
     # HA's cv.datetime returns a naive datetime when the service call's
     # string has no UTC offset (e.g. "2026-10-01 09:00:00"). Serializing
     # that as-is produces a "floating" DTSTART (no Z, no TZID), which
-    # iCloud's CalDAV edge rejects outright with a bare 404.
+    # iCloud's CalDAV edge rejects outright with a bare 404. Renamed from
+    # "..._to_utc_..." (Paket C): a naive start is now normalized to HA's
+    # own configured zone, not unconditionally UTC -- this suite's ambient
+    # zone happens to be UTC (no timezone fixture requested), so the
+    # tz-aware assertion below still holds either way.
     target = _make_target()
     spec = EventSpec(
         summary="Dentist",
@@ -947,6 +952,30 @@ def _mock_uid_event(summary: str, start: datetime | date, has_alarm: bool = Fals
         component.add_component(alarm)
     mock_event = MagicMock()
     mock_event.icalendar_component = component
+    return mock_event
+
+
+def _mock_uid_event_in_calendar(
+    summary: str, start: datetime | date, end: datetime | date | None = None
+) -> MagicMock:
+    """Like `_mock_uid_event`, but wraps the VEVENT in a real VCALENDAR.
+
+    Needed for tests that exercise `add_missing_timezones()`/VTIMEZONE
+    behavior (Paket C) -- `_mock_uid_event`'s bare `icalendar.Event` has no
+    `icalendar_instance` to add a VTIMEZONE component to.
+    """
+    cal = icalendar.Calendar()
+    cal.add("prodid", "-//test//")
+    cal.add("version", "2.0")
+    component = icalendar.Event()
+    component.add("uid", "evt-uid-1")
+    component.add("summary", summary)
+    component.add("dtstart", start)
+    component.add("dtend", end if end is not None else start)
+    cal.add_component(component)
+    mock_event = MagicMock()
+    mock_event.icalendar_component = component
+    mock_event.icalendar_instance = cal
     return mock_event
 
 
@@ -2017,3 +2046,247 @@ async def test_delete_event_naive_midnight_datetime_matches_all_day_instance():
     exdate_values = [d.dt for prop in exdates for d in prop.dts]
     assert exdate_values == [date(2026, 10, 8)]
     assert all(not isinstance(v, datetime) for v in exdate_values)
+
+
+# --- C: local time instead of UTC ---
+
+
+@pytest.mark.asyncio
+async def test_create_event_series_uses_tzid_and_vtimezone(europe_berlin_timezone):
+    # (f) A new recurring CalDAV event's DTSTART/DTEND carry the HA zone's
+    # TZID, and the VCALENDAR is self-contained (a matching VTIMEZONE).
+    target = _make_target()
+    spec = EventSpec(
+        summary="Standup",
+        start=datetime(2026, 10, 1, 9, 0),
+        end=datetime(2026, 10, 1, 9, 30),
+        rrule="FREQ=WEEKLY",
+    )
+
+    _uid, mock_calendar = await _create_event(target, "https://example.test/cal/", spec)
+
+    ics = mock_calendar.save_event.call_args[0][0]
+    cal = icalendar.Calendar.from_ical(ics)
+    event = next(iter(cal.walk("VEVENT")))
+    assert event["dtstart"].params.get("TZID") == "Europe/Berlin"
+    assert event["dtstart"].dt == datetime(2026, 10, 1, 9, 0, tzinfo=ZoneInfo("Europe/Berlin"))
+    assert [tz.tz_name for tz in cal.timezones] == ["Europe/Berlin"]
+
+
+@pytest.mark.asyncio
+async def test_create_event_series_expands_correctly_across_dst(europe_berlin_timezone):
+    # (g) recurring_ical_events must resolve the post-DST instance at the
+    # same *local* wall time, not drift by the changed UTC offset -- proves
+    # add_missing_timezones() produced a usable VTIMEZONE, not just a
+    # syntactically-present one.
+    target = _make_target()
+    spec = EventSpec(
+        summary="Standup",
+        start=datetime(2026, 10, 1, 9, 0),
+        end=datetime(2026, 10, 1, 9, 30),
+        rrule="FREQ=WEEKLY",
+    )
+
+    _uid, mock_calendar = await _create_event(target, "https://example.test/cal/", spec)
+
+    ics = mock_calendar.save_event.call_args[0][0]
+    cal = icalendar.Calendar.from_ical(ics)
+    occurrences = recurring_ical_events.of(cal).between((2026, 10, 28), (2026, 10, 30))
+
+    assert len(occurrences) == 1
+    dt = occurrences[0]["dtstart"].dt
+    assert dt == datetime(2026, 10, 29, 9, 0, tzinfo=ZoneInfo("Europe/Berlin"))
+    assert dt.utcoffset() == timedelta(hours=1)
+
+
+@pytest.mark.asyncio
+async def test_update_event_time_change_preserves_existing_tzid():
+    # (h) A time-update on an existing TZID series keeps that same TZID --
+    # never re-normalizes to UTC or HA's own zone. Also: add_missing_
+    # timezones() must not add a second VTIMEZONE for a zone that's already
+    # there.
+    target = _make_target()
+    calendar_ref = "https://example.test/cal/"
+    mock_client, mock_calendar = _mock_client_with_calendar(calendar_ref)
+    ny = ZoneInfo("America/New_York")
+    mock_event = _mock_uid_event_in_calendar(
+        "Standup", datetime(2026, 10, 1, 9, 0, tzinfo=ny), datetime(2026, 10, 1, 9, 30, tzinfo=ny)
+    )
+    # A real, server-stored event is already self-contained.
+    mock_event.icalendar_instance.add_missing_timezones()
+    vtimezones_before = len(mock_event.icalendar_instance.walk("VTIMEZONE"))
+    mock_calendar.event_by_uid.return_value = mock_event
+
+    new_start = datetime(2026, 10, 2, 18, 0, tzinfo=UTC)  # 14:00 EDT (-04:00)
+    new_end = datetime(2026, 10, 2, 18, 30, tzinfo=UTC)
+    with patch(
+        "custom_components.calendar_bridge.caldav_target.build_client", return_value=mock_client
+    ):
+        updated = await target.async_update_event(
+            calendar_ref, "evt-uid-1", EventUpdate(start=new_start, end=new_end)
+        )
+
+    assert updated is True
+    component = mock_event.icalendar_component
+    assert component["dtstart"].params.get("TZID") == "America/New_York"
+    assert component["dtstart"].dt == datetime(2026, 10, 2, 14, 0, tzinfo=ny)
+    vtimezones_after = mock_event.icalendar_instance.walk("VTIMEZONE")
+    assert len(vtimezones_after) == vtimezones_before
+
+
+@pytest.mark.asyncio
+async def test_update_event_time_change_preserves_floating():
+    # (i) A floating (no TZID, no Z) existing event stays floating after a
+    # time-update.
+    target = _make_target()
+    calendar_ref = "https://example.test/cal/"
+    mock_client, mock_calendar = _mock_client_with_calendar(calendar_ref)
+    mock_event = _mock_uid_event_in_calendar(
+        "Standup", datetime(2026, 10, 1, 9, 0), datetime(2026, 10, 1, 9, 30)
+    )
+    mock_calendar.event_by_uid.return_value = mock_event
+
+    new_start = datetime(2026, 10, 2, 14, 0)
+    with patch(
+        "custom_components.calendar_bridge.caldav_target.build_client", return_value=mock_client
+    ):
+        updated = await target.async_update_event(
+            calendar_ref, "evt-uid-1", EventUpdate(start=new_start)
+        )
+
+    assert updated is True
+    component = mock_event.icalendar_component
+    assert component["dtstart"].dt.tzinfo is None
+    assert component["dtstart"].dt == new_start
+
+
+@pytest.mark.asyncio
+async def test_update_event_time_change_preserves_utc():
+    # (i) A UTC ("Z") existing event stays UTC after a time-update.
+    target = _make_target()
+    calendar_ref = "https://example.test/cal/"
+    mock_client, mock_calendar = _mock_client_with_calendar(calendar_ref)
+    mock_event = _mock_uid_event_in_calendar(
+        "Standup", datetime(2026, 10, 1, 9, 0, tzinfo=UTC), datetime(2026, 10, 1, 9, 30, tzinfo=UTC)
+    )
+    mock_calendar.event_by_uid.return_value = mock_event
+
+    new_start = datetime(2026, 10, 2, 14, 0, tzinfo=UTC)
+    with patch(
+        "custom_components.calendar_bridge.caldav_target.build_client", return_value=mock_client
+    ):
+        updated = await target.async_update_event(
+            calendar_ref, "evt-uid-1", EventUpdate(start=new_start)
+        )
+
+    assert updated is True
+    component = mock_event.icalendar_component
+    assert component["dtstart"].dt == new_start
+    assert "TZID" not in component["dtstart"].params
+
+
+@pytest.mark.asyncio
+async def test_update_event_non_iana_tzid_gets_a_matching_vtimezone():
+    # (l) icalendar maps some non-IANA TZIDs (e.g. Windows zone names) to an
+    # equivalent IANA zone on parse -- confirmed against 6.3.1: a
+    # "W. Europe Standard Time" TZID resolves to zoneinfo.ZoneInfo(
+    # "Europe/Berlin"), and a freshly re-added dtstart is then tagged with
+    # that IANA name, not the original string (icalendar/timezone/
+    # windows_to_olson.py:115; icalendar/prop.py vDDDTypes.__init__ derives
+    # TZID from the value's own tzinfo). Decision: this is accepted --
+    # the requirement is that whichever TZID ends up in use has a matching
+    # VTIMEZONE, the result stays parsable, the instant is right, and
+    # nothing raises. The original, now-unreferenced VTIMEZONE may remain.
+    non_iana_vtimezone = (
+        "BEGIN:VTIMEZONE\r\n"
+        "TZID:W. Europe Standard Time\r\n"
+        "BEGIN:STANDARD\r\n"
+        "DTSTART:16010101T030000\r\n"
+        "TZOFFSETFROM:+0200\r\n"
+        "TZOFFSETTO:+0100\r\n"
+        "RRULE:FREQ=YEARLY;INTERVAL=1;BYDAY=-1SU;BYMONTH=10\r\n"
+        "END:STANDARD\r\n"
+        "BEGIN:DAYLIGHT\r\n"
+        "DTSTART:16010101T020000\r\n"
+        "TZOFFSETFROM:+0100\r\n"
+        "TZOFFSETTO:+0200\r\n"
+        "RRULE:FREQ=YEARLY;INTERVAL=1;BYDAY=-1SU;BYMONTH=3\r\n"
+        "END:DAYLIGHT\r\n"
+        "END:VTIMEZONE\r\n"
+    )
+    ics = (
+        "BEGIN:VCALENDAR\r\n"
+        "VERSION:2.0\r\n"
+        "PRODID:-//test//\r\n"
+        f"{non_iana_vtimezone}"
+        "BEGIN:VEVENT\r\n"
+        "UID:evt-uid-1\r\n"
+        "SUMMARY:Standup\r\n"
+        "DTSTART;TZID=W. Europe Standard Time:20261001T090000\r\n"
+        "DTEND;TZID=W. Europe Standard Time:20261001T093000\r\n"
+        "END:VEVENT\r\n"
+        "END:VCALENDAR\r\n"
+    )
+    cal = icalendar.Calendar.from_ical(ics)
+    component = next(iter(cal.walk("VEVENT")))
+    mock_event = MagicMock()
+    mock_event.icalendar_component = component
+    mock_event.icalendar_instance = cal
+
+    target = _make_target()
+    calendar_ref = "https://example.test/cal/"
+    mock_client, mock_calendar = _mock_client_with_calendar(calendar_ref)
+    mock_calendar.event_by_uid.return_value = mock_event
+
+    new_start = datetime(2026, 10, 2, 12, 0, tzinfo=UTC)
+    new_end = datetime(2026, 10, 2, 12, 30, tzinfo=UTC)
+    with patch(
+        "custom_components.calendar_bridge.caldav_target.build_client", return_value=mock_client
+    ):
+        updated = await target.async_update_event(
+            calendar_ref, "evt-uid-1", EventUpdate(start=new_start, end=new_end)
+        )
+
+    assert updated is True
+    raw = mock_event.icalendar_instance.to_ical().decode()
+    reparsed = icalendar.Calendar.from_ical(raw)  # (2) must stay parsable
+    reparsed_event = next(iter(reparsed.walk("VEVENT")))
+    used_tzid = reparsed_event["dtstart"].params.get("TZID")
+    assert used_tzid is not None and used_tzid != "UTC"
+    # (1) every non-UTC TZID in use has a matching VTIMEZONE.
+    assert used_tzid in {tz.tz_name for tz in reparsed.timezones}
+    # (3) the instant is right, regardless of which TZID string ended up in use.
+    assert reparsed_event["dtstart"].dt == new_start
+
+
+@pytest.mark.asyncio
+async def test_update_event_switch_all_day_to_timed_uses_ha_zone_and_vtimezone(
+    europe_berlin_timezone,
+):
+    # (m) Switching all_day -> timed is treated like a new time value: HA's
+    # own zone with a fresh TZID + VTIMEZONE, since an all-day event never
+    # had a timed representation to preserve.
+    target = _make_target()
+    calendar_ref = "https://example.test/cal/"
+    mock_client, mock_calendar = _mock_client_with_calendar(calendar_ref)
+    mock_event = _mock_uid_event_in_calendar("Birthday", date(2026, 10, 1), date(2026, 10, 2))
+    mock_calendar.event_by_uid.return_value = mock_event
+
+    with patch(
+        "custom_components.calendar_bridge.caldav_target.build_client", return_value=mock_client
+    ):
+        updated = await target.async_update_event(
+            calendar_ref,
+            "evt-uid-1",
+            EventUpdate(
+                all_day=False,
+                start=datetime(2026, 10, 1, 9, 0),
+                end=datetime(2026, 10, 1, 9, 30),
+            ),
+        )
+
+    assert updated is True
+    component = mock_event.icalendar_component
+    assert component["dtstart"].params.get("TZID") == "Europe/Berlin"
+    assert component["dtstart"].dt == datetime(2026, 10, 1, 9, 0, tzinfo=ZoneInfo("Europe/Berlin"))
+    assert [tz.tz_name for tz in mock_event.icalendar_instance.timezones] == ["Europe/Berlin"]
