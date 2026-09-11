@@ -2290,3 +2290,77 @@ async def test_update_event_switch_all_day_to_timed_uses_ha_zone_and_vtimezone(
     assert component["dtstart"].params.get("TZID") == "Europe/Berlin"
     assert component["dtstart"].dt == datetime(2026, 10, 1, 9, 0, tzinfo=ZoneInfo("Europe/Berlin"))
     assert [tz.tz_name for tz in mock_event.icalendar_instance.timezones] == ["Europe/Berlin"]
+
+
+@pytest.mark.asyncio
+async def test_delete_event_non_iana_tzid_gets_a_matching_vtimezone():
+    # (n) Same underlying icalendar remapping as (l), for the delete path:
+    # a "W. Europe Standard Time" master's *regular* instance is deleted
+    # via EXDATE. The EXDATE value is the matched instance's own
+    # RECURRENCE-ID -- synthesized by recurring_ical_events from the
+    # master's own DTSTART, which icalendar has already resolved to
+    # zoneinfo.ZoneInfo("Europe/Berlin") on parse (not the original
+    # "W. Europe Standard Time" string, see (l)) -- so the new EXDATE ends
+    # up tagged with a *different* TZID than the master's own DTSTART
+    # param, and both must end up with a matching VTIMEZONE. Requirement
+    # (Option D): every non-UTC TZID actually in use has a matching
+    # VTIMEZONE, the result stays parsable, and the instance is genuinely
+    # gone from the expansion.
+    non_iana_vtimezone = (
+        "BEGIN:VTIMEZONE\r\n"
+        "TZID:W. Europe Standard Time\r\n"
+        "BEGIN:STANDARD\r\n"
+        "DTSTART:16010101T030000\r\n"
+        "TZOFFSETFROM:+0200\r\n"
+        "TZOFFSETTO:+0100\r\n"
+        "RRULE:FREQ=YEARLY;INTERVAL=1;BYDAY=-1SU;BYMONTH=10\r\n"
+        "END:STANDARD\r\n"
+        "BEGIN:DAYLIGHT\r\n"
+        "DTSTART:16010101T020000\r\n"
+        "TZOFFSETFROM:+0100\r\n"
+        "TZOFFSETTO:+0200\r\n"
+        "RRULE:FREQ=YEARLY;INTERVAL=1;BYDAY=-1SU;BYMONTH=3\r\n"
+        "END:DAYLIGHT\r\n"
+        "END:VTIMEZONE\r\n"
+    )
+    ics = (
+        "BEGIN:VCALENDAR\r\n"
+        "VERSION:2.0\r\n"
+        "PRODID:-//test//\r\n"
+        f"{non_iana_vtimezone}"
+        "BEGIN:VEVENT\r\n"
+        "UID:series-1\r\n"
+        "SUMMARY:Standup\r\n"
+        "DTSTART;TZID=W. Europe Standard Time:20261001T090000\r\n"
+        "DTEND;TZID=W. Europe Standard Time:20261001T093000\r\n"
+        "RRULE:FREQ=WEEKLY\r\n"
+        "END:VEVENT\r\n"
+        "END:VCALENDAR\r\n"
+    )
+    cal = icalendar.Calendar.from_ical(ics)
+    component = next(iter(cal.walk("VEVENT")))
+    mock_event = MagicMock()
+    mock_event.icalendar_component = component
+    mock_event.icalendar_instance = cal
+
+    target = _make_target()
+    calendar_ref = "https://example.test/cal/"
+    mock_client, mock_calendar = _mock_client_with_calendar(calendar_ref)
+    mock_calendar.event_by_uid.return_value = mock_event
+
+    occurrence = datetime(2026, 10, 8, 9, 0, tzinfo=ZoneInfo("Europe/Berlin"))
+    with patch(
+        "custom_components.calendar_bridge.caldav_target.build_client", return_value=mock_client
+    ):
+        deleted = await target.async_delete_event(calendar_ref, "series-1", occurrence=occurrence)
+
+    assert deleted is True
+    raw = mock_event.icalendar_instance.to_ical().decode()
+    reparsed = icalendar.Calendar.from_ical(raw)  # must stay parsable
+    reparsed_master = next(iter(reparsed.walk("VEVENT")))
+    assert "EXDATE" in reparsed_master
+    # Every non-UTC TZID actually in use has a matching VTIMEZONE.
+    present = {tz.tz_name for tz in reparsed.timezones}
+    assert reparsed.get_used_tzids() <= present
+    occurrences = recurring_ical_events.of(reparsed).between((2026, 10, 5), (2026, 10, 11))
+    assert len(occurrences) == 0
