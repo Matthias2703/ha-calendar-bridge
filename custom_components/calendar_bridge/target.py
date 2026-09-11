@@ -122,6 +122,32 @@ def event_starts_match(a: datetime | date, b: datetime | date) -> bool:
     return as_utc(a) == as_utc(b)
 
 
+def occurrence_matches(instance_start: datetime | date, occurrence: datetime | date) -> bool:
+    """Whether `occurrence` (a service-call argument) identifies `instance_start`.
+
+    Used instead of `event_starts_match` for matching a backend's own
+    resolved occurrence against the caller-supplied `occurrence`: HA's
+    `cv.datetime` schema validator (used for the `occurrence` field on both
+    `delete_event`/`update_event`) always turns a bare "YYYY-MM-DD" input
+    into a midnight *datetime*, never a plain `date` -- so an all-day
+    series' `instance_start` (a `date`) could never satisfy
+    `event_starts_match`'s strict same-type check, even for the exact
+    intended day. When `instance_start` is a `date` and `occurrence` a
+    `datetime`, this compares by date only: a naive `occurrence` by its own
+    (wall-clock) date, a tz-aware one by its date in HA's configured
+    timezone (mirroring how a genuinely naive/floating value is interpreted
+    elsewhere in this module). Every other combination -- both timed, both
+    all-day, or a `date` `occurrence` against a timed `instance_start` --
+    falls back to `event_starts_match` unchanged.
+    """
+    if not isinstance(instance_start, datetime) and isinstance(occurrence, datetime):
+        occurrence_date = (
+            occurrence.date() if occurrence.tzinfo is None else dt_util.as_local(occurrence).date()
+        )
+        return instance_start == occurrence_date
+    return event_starts_match(instance_start, occurrence)
+
+
 def series_instance_key(uid: str, recurrence_id: datetime | date) -> str:
     """Stable per-occurrence key for one instance of a CalDAV recurring series.
 

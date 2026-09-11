@@ -195,11 +195,37 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
             return
         data = event.data.get(ATTR_SERVICE_DATA) or {}
         summary = data.get("summary")
-        start_raw = data.get("start_date_time") or data.get("start_date")
-        if not summary or not start_raw:
-            return
-        start = dt_util.parse_datetime(start_raw) or dt_util.parse_date(start_raw)
-        if start is None:
+        # Decide the value type by *which* key is present, not by trying
+        # parse_datetime() first -- it happily (and wrongly) parses a bare
+        # "YYYY-MM-DD" into a midnight datetime instead of failing over to
+        # parse_date(). EVENT_CALL_SERVICE carries the caller's raw,
+        # pre-schema-validation service_data, so the value under either key
+        # can already be a date/datetime object instead of a string -- and
+        # not necessarily the "right" one for that key (e.g. a plain `date`
+        # under start_date_time, which parse_datetime() can't parse and
+        # would otherwise raise instead of just skipping this event; or a
+        # `datetime` under start_date, which -- being a `date` subclass --
+        # would slip through an `isinstance(x, date)` check unconverted).
+        start: datetime | date | None
+        if (start_date_time := data.get("start_date_time")) is not None:
+            if isinstance(start_date_time, datetime):
+                start = start_date_time
+            elif isinstance(start_date_time, str):
+                start = dt_util.parse_datetime(start_date_time)
+            else:
+                start = None
+        elif (start_date := data.get("start_date")) is not None:
+            if isinstance(start_date, datetime):
+                start = start_date.date()
+            elif isinstance(start_date, date):
+                start = start_date
+            elif isinstance(start_date, str):
+                start = dt_util.parse_date(start_date)
+            else:
+                start = None
+        else:
+            start = None
+        if not summary or start is None:
             return
 
         for delay in _BACKFILL_RETRY_DELAYS:

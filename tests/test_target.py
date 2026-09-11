@@ -3,8 +3,43 @@
 from __future__ import annotations
 
 from datetime import UTC, date, datetime
+from zoneinfo import ZoneInfo
 
-from custom_components.calendar_bridge.target import render_notify_message
+import pytest
+from homeassistant.helpers import config_validation as cv
+from homeassistant.util import dt as dt_util
+
+from custom_components.calendar_bridge.target import occurrence_matches, render_notify_message
+
+
+def test_cv_datetime_parses_a_bare_date_string_as_a_midnight_datetime() -> None:
+    # (q) The `occurrence` field on delete_event/update_event uses cv.datetime
+    # (services.py:108,116) -- a bare "YYYY-MM-DD" input becomes a midnight
+    # *datetime*, never a plain `date`. Both backends' occurrence-matching
+    # must account for this when the original instance itself is all-day.
+    result = cv.datetime("2026-10-03")
+    assert isinstance(result, datetime)
+    assert result == datetime(2026, 10, 3, 0, 0)
+
+
+@pytest.fixture
+def europe_berlin_timezone():
+    original = dt_util.get_default_time_zone()
+    dt_util.set_default_time_zone(dt_util.get_time_zone("Europe/Berlin"))
+    yield
+    dt_util.set_default_time_zone(original)
+
+
+def test_occurrence_matches_tz_aware_occurrence_near_midnight_uses_ha_timezone(
+    europe_berlin_timezone,
+) -> None:
+    # (B2-06) Documents existing behavior: a tz-aware `occurrence` is compared
+    # by its date in HA's own configured timezone, not its own -- 23:30 on
+    # 2026-10-03 in America/Los_Angeles is already 2026-10-04 in the
+    # HA-configured Europe/Berlin.
+    occurrence = datetime(2026, 10, 3, 23, 30, tzinfo=ZoneInfo("America/Los_Angeles"))
+    assert occurrence_matches(date(2026, 10, 4), occurrence)
+    assert not occurrence_matches(date(2026, 10, 3), occurrence)
 
 
 def test_default_template_is_used_when_none_given() -> None:
