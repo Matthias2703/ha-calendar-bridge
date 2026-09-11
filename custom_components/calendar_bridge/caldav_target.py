@@ -339,7 +339,7 @@ class CalDavCalendarTarget:
         once per UID per poll.
 
         A series whose old bare-UID baseline predates this per-instance
-        keying (no instance key of it known yet, but the UID itself is)
+        keying (no persisted instance key of it known yet, but the UID itself is)
         migrates silently: this poll's instances become the new baseline
         (`suppress_notification=True`, no backfill) without notifying for
         events the user has already seen under the old scheme -- a later
@@ -370,7 +370,7 @@ class CalDavCalendarTarget:
                 for component in components
             ]
             uid_known = uid in known_uids
-            any_instance_known = any(key in known_uids for key in instance_keys)
+            any_instance_known = any(key.startswith(f"{uid}#") for key in known_uids)
             migrating = uid_known and not any_instance_known
             series_already_known = uid_known or any_instance_known
 
@@ -380,7 +380,12 @@ class CalDavCalendarTarget:
                 start = dtstart.dt if dtstart is not None else now
                 seen.add(
                     SeenEvent(
-                        uid=key, summary=summary, start=start, suppress_notification=migrating
+                        uid=key,
+                        summary=summary,
+                        start=start,
+                        suppress_notification=(
+                            migrating or (key == uid and not uid_known and any_instance_known)
+                        ),
                     )
                 )
 
@@ -398,9 +403,12 @@ class CalDavCalendarTarget:
                 except caldav.lib.error.NotFoundError:
                     continue
                 instance_calendar = real_event.icalendar_instance
-                master = (
-                    self._find_master_component(instance_calendar) or real_event.icalendar_component
-                )
+                master = self._find_master_component(instance_calendar)
+                if master is None:
+                    component = real_event.icalendar_component
+                    if "recurrence-id" in component:
+                        continue
+                    master = component
                 if list(master.walk("VALARM")):
                     continue  # already has a reminder
                 event_all_day = not isinstance(master["dtstart"].dt, datetime)
