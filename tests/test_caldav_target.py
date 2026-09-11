@@ -1963,3 +1963,57 @@ async def test_new_override_and_exdate_match_utc_master_value_type():
     exdate_values = [d.dt for prop in exdates for d in prop.dts]
     assert exdate_values == [occurrence]
     assert exdate_values[0].tzinfo == UTC
+
+
+@pytest.mark.asyncio
+async def test_update_event_naive_midnight_datetime_matches_all_day_instance():
+    # (s) HA's cv.datetime always turns a service call's bare "2026-10-08"
+    # into a naive midnight *datetime* -- an all-day master's occurrence
+    # lookup must still resolve it and create a DATE-valued override, not a
+    # DATE-TIME one.
+    target = _make_target()
+    calendar_ref = "https://example.test/cal/"
+    mock_client, mock_calendar = _mock_client_with_calendar(calendar_ref)
+    mock_event = _mock_recurring_event("series-1", date(2026, 10, 1), rrule="FREQ=WEEKLY")
+    mock_calendar.event_by_uid.return_value = mock_event
+    occurrence = datetime(2026, 10, 8, 0, 0)
+
+    with patch(
+        "custom_components.calendar_bridge.caldav_target.build_client", return_value=mock_client
+    ):
+        updated = await target.async_update_event(
+            calendar_ref, "series-1", EventUpdate(location="Room 4"), occurrence=occurrence
+        )
+
+    assert updated is True
+    exception = next(v for v in _vevents(mock_event.icalendar_instance) if "RECURRENCE-ID" in v)
+    recurrence_id = exception["recurrence-id"].dt
+    assert recurrence_id == date(2026, 10, 8)
+    assert not isinstance(recurrence_id, datetime)
+    dtstart = exception["dtstart"].dt
+    assert dtstart == date(2026, 10, 8)
+    assert not isinstance(dtstart, datetime)
+
+
+@pytest.mark.asyncio
+async def test_delete_event_naive_midnight_datetime_matches_all_day_instance():
+    # (s) Same, for the delete path -- EXDATE must be DATE-valued too.
+    target = _make_target()
+    calendar_ref = "https://example.test/cal/"
+    mock_client, mock_calendar = _mock_client_with_calendar(calendar_ref)
+    mock_event = _mock_recurring_event("series-1", date(2026, 10, 1), rrule="FREQ=WEEKLY")
+    mock_calendar.event_by_uid.return_value = mock_event
+    occurrence = datetime(2026, 10, 8, 0, 0)
+
+    with patch(
+        "custom_components.calendar_bridge.caldav_target.build_client", return_value=mock_client
+    ):
+        deleted = await target.async_delete_event(calendar_ref, "series-1", occurrence=occurrence)
+
+    assert deleted is True
+    master = _vevents(mock_event.icalendar_instance)[0]
+    exdates = master.get("exdate")
+    exdates = exdates if isinstance(exdates, list) else [exdates]
+    exdate_values = [d.dt for prop in exdates for d in prop.dts]
+    assert exdate_values == [date(2026, 10, 8)]
+    assert all(not isinstance(v, datetime) for v in exdate_values)

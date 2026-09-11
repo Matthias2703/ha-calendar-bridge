@@ -1365,3 +1365,31 @@ async def test_update_event_with_occurrence_all_day_date_matches():
     service.async_patch_event.assert_awaited_once_with(
         _CALENDAR_REF, "master1_20261003", {"summary": "Renamed"}
     )
+
+
+@pytest.mark.asyncio
+async def test_update_event_with_occurrence_naive_midnight_datetime_matches_all_day_instance():
+    # (r) HA's cv.datetime always turns a service call's bare "2026-10-03"
+    # into a naive midnight *datetime* (see test_target.py's (q)) -- an
+    # all-day series' occurrence lookup must still find the matching
+    # date-valued instance, not require the caller to pass a bare `date`.
+    target = _make_target()
+    occurrence = datetime(2026, 10, 3, 0, 0)
+    service = _FakeService()
+    instance_items = [
+        {
+            "id": "master1_20261003",
+            "originalStartTime": {"date": "2026-10-03"},
+        },
+    ]
+    auth = _auth_finding_instances("master1", instance_items)
+
+    with _patched(target, service, auth):
+        updated = await target.async_update_event(
+            _CALENDAR_REF, "series-uid", EventUpdate(summary="Renamed"), occurrence=occurrence
+        )
+
+    assert updated is True
+    service.async_patch_event.assert_awaited_once_with(
+        _CALENDAR_REF, "master1_20261003", {"summary": "Renamed"}
+    )

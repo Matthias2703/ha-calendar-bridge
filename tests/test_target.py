@@ -4,7 +4,19 @@ from __future__ import annotations
 
 from datetime import UTC, date, datetime
 
+from homeassistant.helpers import config_validation as cv
+
 from custom_components.calendar_bridge.target import render_notify_message
+
+
+def test_cv_datetime_parses_a_bare_date_string_as_a_midnight_datetime() -> None:
+    # (q) The `occurrence` field on delete_event/update_event uses cv.datetime
+    # (services.py:108,116) -- a bare "YYYY-MM-DD" input becomes a midnight
+    # *datetime*, never a plain `date`. Both backends' occurrence-matching
+    # must account for this when the original instance itself is all-day.
+    result = cv.datetime("2026-10-03")
+    assert isinstance(result, datetime)
+    assert result == datetime(2026, 10, 3, 0, 0)
 
 
 def test_default_template_is_used_when_none_given() -> None:

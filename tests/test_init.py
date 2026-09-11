@@ -3,11 +3,121 @@
 from __future__ import annotations
 
 from datetime import UTC, date, datetime, timedelta
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from homeassistant.const import (
+    ATTR_DOMAIN,
+    ATTR_SERVICE,
+    ATTR_SERVICE_DATA,
+    CONF_PASSWORD,
+    CONF_URL,
+    CONF_USERNAME,
+    CONF_VERIFY_SSL,
+    EVENT_CALL_SERVICE,
+)
+from homeassistant.core import HomeAssistant
+from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.calendar_bridge import _async_schedule_ha_notification
+from custom_components.calendar_bridge.const import (
+    CONF_CALENDAR_URL,
+    CONF_DEFAULT_REMINDER_METHOD,
+    CONF_DEFAULT_REMINDER_MINUTES,
+    CONF_DISPLAY_NAME,
+    DOMAIN,
+    REMINDER_METHOD_POPUP,
+)
+
+_CAL1 = "https://caldav.example.test/cal1"
+
+
+def _make_minimal_caldav_entry() -> MockConfigEntry:
+    return MockConfigEntry(
+        domain=DOMAIN,
+        data={
+            CONF_URL: "https://caldav.example.test/",
+            CONF_USERNAME: "user@example.test",
+            CONF_PASSWORD: "hunter2",
+            CONF_VERIFY_SSL: True,
+        },
+        subentries_data=[
+            {
+                "subentry_type": "calendar",
+                "title": "Home",
+                "unique_id": _CAL1,
+                "data": {
+                    CONF_CALENDAR_URL: _CAL1,
+                    CONF_DISPLAY_NAME: "Home",
+                    CONF_DEFAULT_REMINDER_MINUTES: 15,
+                    CONF_DEFAULT_REMINDER_METHOD: REMINDER_METHOD_POPUP,
+                },
+            }
+        ],
+    )
+
+
+async def _fire_create_event(hass: HomeAssistant, service_data: dict) -> AsyncMock:
+    """Set up a minimal entry, fire EVENT_CALL_SERVICE for calendar.create_event.
+
+    `asyncio.sleep` is patched to a no-op -- the real listener retries with
+    real delays (`_BACKFILL_RETRY_DELAYS`), which a test must not actually
+    wait through. Returns the mocked target so the caller can inspect what
+    `async_backfill_reminder` was called with.
+    """
+    entry = _make_minimal_caldav_entry()
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    mock_target = AsyncMock()
+    mock_target.async_backfill_reminder = AsyncMock(return_value=True)
+    entry.runtime_data = mock_target
+
+    with patch("custom_components.calendar_bridge.asyncio.sleep", new=AsyncMock()):
+        hass.bus.async_fire(
+            EVENT_CALL_SERVICE,
+            {
+                ATTR_DOMAIN: "calendar",
+                ATTR_SERVICE: "create_event",
+                ATTR_SERVICE_DATA: service_data,
+            },
+        )
+        await hass.async_block_till_done()
+
+    return mock_target
+
+
+@pytest.mark.asyncio
+async def test_reactive_listener_start_date_gives_a_date_not_datetime(
+    hass: HomeAssistant, enable_custom_integrations: None
+) -> None:
+    # (t) The key present (start_date vs start_date_time) must decide the
+    # value type -- not a "try datetime, then date" parse order, which would
+    # turn a bare "2026-10-03" into midnight instead of a plain date.
+    mock_target = await _fire_create_event(
+        hass, {"summary": "Birthday", "start_date": "2026-10-03"}
+    )
+
+    mock_target.async_backfill_reminder.assert_awaited()
+    start_arg = mock_target.async_backfill_reminder.call_args_list[-1].args[2]
+    assert isinstance(start_arg, date)
+    assert not isinstance(start_arg, datetime)
+    assert start_arg == date(2026, 10, 3)
+
+
+@pytest.mark.asyncio
+async def test_reactive_listener_start_date_time_gives_a_datetime(
+    hass: HomeAssistant, enable_custom_integrations: None
+) -> None:
+    mock_target = await _fire_create_event(
+        hass, {"summary": "Dentist", "start_date_time": "2026-10-03 09:00:00"}
+    )
+
+    mock_target.async_backfill_reminder.assert_awaited()
+    start_arg = mock_target.async_backfill_reminder.call_args_list[-1].args[2]
+    assert isinstance(start_arg, datetime)
+    assert start_arg == datetime(2026, 10, 3, 9, 0, 0)
 
 
 @pytest.mark.asyncio
