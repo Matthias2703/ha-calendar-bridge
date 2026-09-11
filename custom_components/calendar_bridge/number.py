@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import logging
+
 from homeassistant.components.number import NumberEntity, NumberMode
-from homeassistant.config_entries import ConfigEntry
+from homeassistant.config_entries import ConfigEntry, ConfigSubentry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
@@ -16,6 +18,8 @@ from .const import (
     MAX_REMINDER_MINUTES,
     MIN_REMINDER_MINUTES,
 )
+
+_LOGGER = logging.getLogger(__name__)
 
 
 async def async_setup_entry(
@@ -55,18 +59,41 @@ class CalendarBridgeReminderMinutes(NumberEntity):
         self._attr_unique_id = f"{subentry_id}_reminder_minutes"
         self._attr_device_info = DeviceInfo(identifiers={(DOMAIN, subentry_id)})
 
+    def _subentry(self) -> ConfigSubentry | None:
+        """This entity's own subentry, or None once it's been removed.
+
+        A subentry removal's own update-listener notification and its
+        device/entity-registry cleanup (which eventually tears this entity
+        down) race each other -- `entry.subentries` loses the key well
+        before this entity is actually removed, so every access below must
+        tolerate a momentarily-missing subentry.
+        """
+        return self._entry.subentries.get(self._subentry_id)
+
     async def async_added_to_hass(self) -> None:
         self.async_on_remove(self._entry.add_update_listener(self._async_entry_updated))
 
     async def _async_entry_updated(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
+        if self._subentry() is None:
+            return  # about to be removed by the entity registry -- nothing to update
         self.async_write_ha_state()
 
     @property
-    def native_value(self) -> float:
-        return float(self._entry.subentries[self._subentry_id].data[CONF_DEFAULT_REMINDER_MINUTES])
+    def available(self) -> bool:
+        return super().available and self._subentry() is not None
+
+    @property
+    def native_value(self) -> float | None:
+        subentry = self._subentry()
+        if subentry is None:
+            return None
+        return float(subentry.data[CONF_DEFAULT_REMINDER_MINUTES])
 
     async def async_set_native_value(self, value: float) -> None:
-        subentry = self._entry.subentries[self._subentry_id]
+        subentry = self._subentry()
+        if subentry is None:
+            _LOGGER.debug("Ignoring a reminder-minutes change for a subentry that no longer exists")
+            return
         self.hass.config_entries.async_update_subentry(
             self._entry,
             subentry,
@@ -97,22 +124,34 @@ class CalendarBridgeNotifyMinutes(NumberEntity):
         self._attr_unique_id = f"{subentry_id}_notify_minutes"
         self._attr_device_info = DeviceInfo(identifiers={(DOMAIN, subentry_id)})
 
+    def _subentry(self) -> ConfigSubentry | None:
+        """This entity's own subentry, or None once removed (see the sibling number above)."""
+        return self._entry.subentries.get(self._subentry_id)
+
     async def async_added_to_hass(self) -> None:
         self.async_on_remove(self._entry.add_update_listener(self._async_entry_updated))
 
     async def _async_entry_updated(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
+        if self._subentry() is None:
+            return  # about to be removed by the entity registry -- nothing to update
         self.async_write_ha_state()
 
     @property
-    def native_value(self) -> float:
-        return float(
-            self._entry.subentries[self._subentry_id].data.get(
-                CONF_NOTIFY_MINUTES_BEFORE, DEFAULT_NOTIFY_MINUTES_BEFORE
-            )
-        )
+    def available(self) -> bool:
+        return super().available and self._subentry() is not None
+
+    @property
+    def native_value(self) -> float | None:
+        subentry = self._subentry()
+        if subentry is None:
+            return None
+        return float(subentry.data.get(CONF_NOTIFY_MINUTES_BEFORE, DEFAULT_NOTIFY_MINUTES_BEFORE))
 
     async def async_set_native_value(self, value: float) -> None:
-        subentry = self._entry.subentries[self._subentry_id]
+        subentry = self._subentry()
+        if subentry is None:
+            _LOGGER.debug("Ignoring a notify-minutes change for a subentry that no longer exists")
+            return
         self.hass.config_entries.async_update_subentry(
             self._entry,
             subentry,
