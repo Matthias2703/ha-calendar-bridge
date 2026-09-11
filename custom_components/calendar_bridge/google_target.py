@@ -126,6 +126,38 @@ def _as_utc_datetime(value: datetime | date) -> datetime:
     return dt_util.as_utc(datetime.combine(value, datetime.min.time()))
 
 
+def _resolve_zone_name(current: GoogleEvent | None) -> str:
+    """The IANA zone name to declare as `timeZone`: the event's own if it has one, else HA's.
+
+    A new event has no `current` (always HA's own zone). An update reuses
+    the event's existing `start.timeZone` when present -- otherwise (an
+    event created before this field was ever set, or an all-day event) HA's
+    own configured zone is the only sensible default.
+    """
+    if current is not None and current.start.timezone:
+        return current.start.timezone
+    return str(dt_util.get_default_time_zone())
+
+
+def _localized_datetime(value: datetime | date, zone_name: str) -> datetime:
+    """Express `value` in exactly `zone_name` -- the zone the body will declare as timeZone.
+
+    A bare `date` (shouldn't normally reach here -- the caller is always on
+    the non-all-day path -- but `EventSpec`/`EventUpdate` type `start`/`end`
+    as `datetime | date`) is combined with midnight first, same as
+    `_as_utc_datetime`. `value` is then interpreted the usual way (naive is
+    HA's own configured zone, tz-aware is a real conversion) via `dt_util.
+    as_local`, and re-expressed in `zone_name` via `.astimezone` -- so
+    `dateTime`'s wall clock and offset always match the `timeZone` field
+    sent alongside it, whether that's HA's own zone (a new event) or an
+    existing event's own zone (an update).
+    """
+    if not isinstance(value, datetime):
+        value = datetime.combine(value, datetime.min.time())
+    zone = dt_util.get_time_zone(zone_name) or dt_util.get_default_time_zone()
+    return dt_util.as_local(value).astimezone(zone)
+
+
 def _has_reminder_override(event: GoogleEvent) -> bool:
     """Whether `event` has an explicit (non-useDefault) reminder override list.
 
@@ -184,13 +216,18 @@ def _build_event(spec: EventSpec) -> GoogleEvent:
         fields["start"] = DateOrDatetime(date=start_date)
         fields["end"] = DateOrDatetime(date=end_date)
     else:
-        start_dt = _as_utc_datetime(spec.start)
-        if spec.end is not None:
-            end_dt = _as_utc_datetime(spec.end)
-        else:
-            end_dt = start_dt + DEFAULT_EVENT_DURATION
-        fields["start"] = DateOrDatetime(dateTime=start_dt)
-        fields["end"] = DateOrDatetime(dateTime=end_dt)
+        # A new event always uses HA's own configured zone -- Google
+        # requires timeZone to expand a recurring event, and setting it
+        # unconditionally (even for a single event) keeps one code path.
+        zone_name = str(dt_util.get_default_time_zone())
+        start_dt = _localized_datetime(spec.start, zone_name)
+        end_dt = (
+            _localized_datetime(spec.end, zone_name)
+            if spec.end is not None
+            else start_dt + DEFAULT_EVENT_DURATION
+        )
+        fields["start"] = DateOrDatetime(dateTime=start_dt, timeZone=zone_name)
+        fields["end"] = DateOrDatetime(dateTime=end_dt, timeZone=zone_name)
     if spec.description:
         fields["description"] = spec.description
     if spec.location:
@@ -201,6 +238,14 @@ def _build_event(spec: EventSpec) -> GoogleEvent:
     # an event that's supposed to have zero reminders must say `useDefault:
     # false` with no overrides, otherwise Google treats it as `useDefault:
     # true` and silently attaches the calendar's own default reminder.
+    # Google's `overrides[].minutes` (Paket C, point 6) is a plain integer
+    # count of minutes before the event's start -- unlike a CalDAV VALARM's
+    # TRIGGER, it has no day/week unit at all, so it's inherently a fixed
+    # duration with no RFC-5545-style "nominal calendar day" ambiguity to
+    # worry about here (see `effective_reminder_minutes` for how an
+    # all-day override is anchored to a sane time of day in the first
+    # place, and `_build_alarm` in caldav_target.py for the CalDAV-side
+    # nuance this doesn't share).
     fields["reminders"] = Reminders(
         useDefault=False,
         overrides=[
@@ -256,10 +301,34 @@ def _update_body(updates: EventUpdate, current: GoogleEvent | None) -> dict[str,
             body["start"] = {"date": start_date.isoformat()}
             body["end"] = {"date": end_date.isoformat()}
         else:
-            start_dt = _as_utc_datetime(start)
-            end_dt = _as_utc_datetime(end) if end is not None else start_dt + DEFAULT_EVENT_DURATION
-            body["start"] = {"dateTime": start_dt.isoformat()}
-            body["end"] = {"dateTime": end_dt.isoformat()}
+            # `_resolve_zone_name` naturally falls back to HA's own zone
+            # for a switch from all-day too -- an all-day `current` has no
+            # `start.timezone` to preserve in the first place.
+            zone_name = _resolve_zone_name(current)
+            start_dt = _localized_datetime(start, zone_name)
+            end_dt = (
+                _localized_datetime(end, zone_name)
+                if end is not None
+                else start_dt + DEFAULT_EVENT_DURATION
+            )
+            body["start"] = {"dateTime": start_dt.isoformat(), "timeZone": zone_name}
+            body["end"] = {"dateTime": end_dt.isoformat(), "timeZone": zone_name}
+    elif (
+        updates.rrule
+        and current is not None
+        and not all_day
+        and current.start.timezone is None
+        and current.start.date_time is not None
+    ):
+        # Adding an RRULE to a still-single event without a timeZone must
+        # backfill one -- Google requires timeZone to expand a recurring
+        # event, and this is the only field-combination that introduces a
+        # recurrence without also touching start/end.
+        zone_name = _resolve_zone_name(current)
+        start_dt = _localized_datetime(current.start.value, zone_name)
+        end_dt = _localized_datetime(current.end.value, zone_name)
+        body["start"] = {"dateTime": start_dt.isoformat(), "timeZone": zone_name}
+        body["end"] = {"dateTime": end_dt.isoformat(), "timeZone": zone_name}
 
     if updates.reminders is not None:
         body["reminders"] = {
@@ -685,6 +754,9 @@ class GoogleCalendarTarget:
                 or updates.end is not None
                 or updates.all_day is not None
                 or updates.reminders is not None
+                # An rrule addition may need to backfill a missing timeZone
+                # (Paket C) -- `_update_body` decides using `current`.
+                or updates.rrule is not None
             )
             # Reuse the item already fetched while resolving the event/
             # instance id above -- it already carries the same fields an

@@ -104,6 +104,53 @@ def as_utc(value: datetime | date) -> datetime | date:
     return value
 
 
+def preserve_time_representation(existing: datetime, value: datetime) -> datetime:
+    """Re-express `value` (a new instant) in the same tz form as `existing`.
+
+    Used by a time-update that must keep an existing event's own timed
+    representation instead of always renormalizing to HA's own zone (both
+    backends): `value` is first interpreted the usual way (naive is HA's
+    own configured zone, tz-aware is a real conversion) via `dt_util.
+    as_local`, then re-expressed in `existing`'s own tzinfo. `existing.
+    tzinfo is None` (a floating/naive value, e.g. a CalDAV floating
+    DTSTART) keeps floating -- the result is naive, in HA's own zone. Any
+    other tzinfo -- a named IANA zone or UTC, both of which surface as a
+    real `zoneinfo.ZoneInfo` once a CalDAV TZID/Z-suffixed value has been
+    parsed by icalendar, or Google's own account timezone -- re-expresses
+    `value` in that exact same zone via `.astimezone`, so a TZID or UTC
+    representation survives an update unchanged.
+    """
+    localized = dt_util.as_local(value)
+    if existing.tzinfo is None:
+        return localized.replace(tzinfo=None)
+    return localized.astimezone(existing.tzinfo)
+
+
+def compute_reminder_fire_at(
+    start: datetime | date, minutes_before: int, time_of_day: time | None
+) -> datetime:
+    """UTC fire time for an HA-native notification reminder (not a native VALARM/override).
+
+    A timed `start` is a plain fixed-duration subtraction -- `minutes_before`
+    real minutes before the event, unaffected by DST.
+
+    An all-day `start` instead subtracts *nominal calendar days* from the
+    date first (`effective_reminder_minutes`'s all-day math computes a
+    fixed total-minutes count, which is the wrong tool here: subtracting it
+    from a UTC instant assumes every "day" is exactly 24h), anchors the
+    result to `time_of_day` (default `DEFAULT_ALL_DAY_REMINDER_TIME`) in
+    HA's own configured zone, and only then converts to UTC -- so a lead
+    time spanning a DST transition still fires at the intended local
+    wall-clock time instead of drifting by the offset change.
+    """
+    if isinstance(start, datetime):
+        return dt_util.as_utc(start) - timedelta(minutes=minutes_before)
+    anchor = time_of_day or DEFAULT_ALL_DAY_REMINDER_TIME
+    days_before = max(1, math.ceil(minutes_before / 1440))
+    fire_date = start - timedelta(days=days_before)
+    return dt_util.as_utc(datetime.combine(fire_date, anchor))
+
+
 def event_starts_match(a: datetime | date, b: datetime | date) -> bool:
     """True iff `a` and `b` are the exact same event start.
 

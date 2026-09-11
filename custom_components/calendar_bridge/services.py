@@ -5,7 +5,6 @@ from __future__ import annotations
 import dataclasses
 import logging
 from collections.abc import Mapping
-from datetime import datetime, time, timedelta
 from typing import Any
 
 import voluptuous as vol
@@ -14,7 +13,6 @@ from homeassistant.const import ATTR_DEVICE_ID
 from homeassistant.core import HomeAssistant, ServiceCall, ServiceResponse
 from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers import config_validation as cv
-from homeassistant.util import dt as dt_util
 
 from .caldav_target import CalDavAuthError, CalDavConnectionError
 from .const import (
@@ -53,7 +51,7 @@ from .target import (
     EventSpec,
     EventUpdate,
     ReminderSpec,
-    effective_reminder_minutes,
+    compute_reminder_fire_at,
     render_notify_message,
 )
 
@@ -326,20 +324,7 @@ async def _async_schedule_notification(
     hass: HomeAssistant, entry_id: str, notify_data: dict[str, Any], spec: EventSpec
 ) -> None:
     """Schedule the optional HA-native notification reminder."""
-    # EventSpec types `start` as `datetime | date` for the CalDAV all-day
-    # path -- narrow it to a real datetime here (midnight for an all-day
-    # event); `effective_reminder_minutes` below still anchors an all-day
-    # event's actual fire time to a sane hour instead of that midnight.
-    start = (
-        spec.start if isinstance(spec.start, datetime) else datetime.combine(spec.start, time.min)
-    )
-    effective_minutes = effective_reminder_minutes(
-        spec.all_day, notify_data[ATTR_MINUTES_BEFORE], None
-    )
-    # HA's cv.datetime returns a naive datetime for a call without a UTC
-    # offset -- async_track_point_in_time needs a tz-aware one to compare
-    # against dt_util.utcnow() correctly.
-    fire_at = dt_util.as_utc(start) - timedelta(minutes=effective_minutes)
+    fire_at = compute_reminder_fire_at(spec.start, notify_data[ATTR_MINUTES_BEFORE], None)
     message = render_notify_message(notify_data.get(ATTR_NOTIFY_MESSAGE), spec.summary, spec.start)
 
     scheduler: ReminderScheduler = hass.data[DOMAIN]["reminder_scheduler"]

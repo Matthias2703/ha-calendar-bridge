@@ -26,10 +26,10 @@ from .target import (
     ReminderMethod,
     SeenEvent,
     all_day_bounds,
-    as_utc,
     effective_reminder_minutes,
     event_starts_match,
     occurrence_matches,
+    preserve_time_representation,
     series_instance_key,
 )
 
@@ -58,6 +58,42 @@ def build_client(url: str, username: str, password: str, verify_ssl: bool) -> ca
     return caldav.DAVClient(
         url=url, username=username, password=password, ssl_verify_cert=verify_ssl
     )
+
+
+def _add_missing_timezones(instance_calendar: icalendar.Calendar) -> None:
+    """Like `Calendar.add_missing_timezones()`, but tolerates an orphaned VTIMEZONE.
+
+    icalendar 6.3.1's own `get_missing_tzids()` assumes every VTIMEZONE
+    component already in the calendar is still referenced, and does an
+    unconditional `set.remove()` of each one's name from the used-TZID set
+    -- it raises `KeyError` if a VTIMEZONE is no longer referenced. That
+    happens here on a legitimate, accepted path: icalendar itself remaps
+    some non-IANA TZIDs (e.g. a Windows zone name like "W. Europe Standard
+    Time") to an equivalent IANA zone when parsing a DTSTART, so a
+    time-update re-adding that value tags it with the IANA name instead --
+    orphaning the original VTIMEZONE, which is left in place on purpose.
+    This computes the same "missing" set via a plain, tolerant difference
+    instead of reusing the fragile built-in method.
+    """
+    used = instance_calendar.get_used_tzids()
+    present = {tz.tz_name for tz in instance_calendar.timezones}
+    for tzid in used - present:
+        try:
+            instance_calendar.add_component(icalendar.Timezone.from_tzid(tzid))
+        except ValueError:
+            continue
+
+
+def _as_datetime(value: datetime | date) -> datetime:
+    """Combine a bare `date` with midnight; a `datetime` passes through unchanged.
+
+    Only meant for the non-all-day path, where `value` should already be a
+    `datetime` by convention -- `EventSpec`/`EventUpdate` still type
+    `start`/`end` as `datetime | date` for their all-day path, though.
+    """
+    if isinstance(value, datetime):
+        return value
+    return datetime.combine(value, datetime.min.time())
 
 
 def _is_series_related(master: icalendar.Event) -> bool:
@@ -529,6 +565,12 @@ class CalDavCalendarTarget:
             )
 
         self._apply_updates_to_component(component, updates)
+        # A time-update may introduce a zone this VCALENDAR hasn't defined
+        # yet -- a fresh HA-zone TZID from an all-day->timed switch, or a
+        # non-IANA TZID icalendar remapped to its IANA equivalent on parse
+        # (e.g. "W. Europe Standard Time" -> "Europe/Berlin") -- and is a
+        # harmless no-op otherwise.
+        _add_missing_timezones(event.icalendar_instance)
         try:
             event.save()
         except caldav.lib.error.PutError:
@@ -673,11 +715,34 @@ class CalDavCalendarTarget:
                 start_date, end_date = all_day_bounds(start, end)
                 component.add("dtstart", start_date)
                 component.add("dtend", end_date)
+            elif isinstance(existing_start, datetime):
+                # Preserve the existing timed representation (TZID, UTC, or
+                # floating) instead of always renormalizing -- a switch
+                # *from* all-day falls to the branch below instead, since
+                # there's no existing timed form to preserve.
+                new_start = preserve_time_representation(existing_start, _as_datetime(start))
+                existing_end_dt = (
+                    existing_end if isinstance(existing_end, datetime) else existing_start
+                )
+                new_end = (
+                    preserve_time_representation(existing_end_dt, _as_datetime(end))
+                    if end is not None
+                    else new_start + DEFAULT_EVENT_DURATION
+                )
+                component.add("dtstart", new_start)
+                component.add("dtend", new_end)
             else:
-                start_utc = as_utc(start)
-                end_utc = as_utc(end) if end is not None else start_utc + DEFAULT_EVENT_DURATION
-                component.add("dtstart", start_utc)
-                component.add("dtend", end_utc)
+                # A switch from all-day to timed is a fresh time value with
+                # no existing representation to preserve -- treat it like a
+                # brand-new event, in HA's own configured zone.
+                new_start = dt_util.as_local(_as_datetime(start))
+                new_end = (
+                    dt_util.as_local(_as_datetime(end))
+                    if end is not None
+                    else new_start + DEFAULT_EVENT_DURATION
+                )
+                component.add("dtstart", new_start)
+                component.add("dtend", new_end)
 
         if updates.reminders is not None:
             summary = str(component.get("summary", ""))
@@ -713,9 +778,16 @@ class CalDavCalendarTarget:
             event.add("dtstart", start_date)
             event.add("dtend", end_date)
         else:
-            start = as_utc(spec.start)
+            # A new event always uses HA's own configured zone -- as_local
+            # attaches a TZID automatically (icalendar's own tzid_from_dt),
+            # and _add_missing_timezones() below adds the matching VTIMEZONE.
+            start = dt_util.as_local(_as_datetime(spec.start))
             event.add("dtstart", start)
-            end = as_utc(spec.end) if spec.end is not None else start + DEFAULT_EVENT_DURATION
+            end = (
+                dt_util.as_local(_as_datetime(spec.end))
+                if spec.end is not None
+                else start + DEFAULT_EVENT_DURATION
+            )
             event.add("dtend", end)
         if spec.description:
             event.add("description", spec.description)
@@ -731,6 +803,7 @@ class CalDavCalendarTarget:
             event.add_component(self._build_alarm(spec.summary, reminder.method, effective_minutes))
 
         cal.add_component(event)
+        _add_missing_timezones(cal)
         return cal.to_ical().decode("utf-8"), uid
 
     def _build_alarm(
@@ -738,6 +811,17 @@ class CalDavCalendarTarget:
     ) -> icalendar.Alarm:
         alarm = icalendar.Alarm()
         alarm.add("action", _ALARM_ACTION[method])
+        # Paket C, point 6 (documented, not changed here): icalendar's
+        # vDuration.to_ical() only emits a day designator ("-P1D") for a
+        # duration with zero leftover seconds -- effective_reminder_minutes'
+        # default 09:00 anchor almost never lands on one (e.g. 1 day before
+        # -> 900 minutes -> "-PT15H"). RFC 5545 3.3.6 treats day/week
+        # designators as *nominal* (DST-adjusted), but a pure H/M/S duration
+        # is an exact elapsed-seconds one -- so this native VALARM trigger
+        # for an all-day reminder can, like the HA-native notification path
+        # this package fixes, end up an hour off across a DST transition.
+        # Left as-is: a client-side interpretation nuance, not a bug this
+        # integration's own code can correct by itself.
         alarm.add("trigger", timedelta(minutes=-minutes_before))
         alarm.add("description", summary)
         if method == "email":
