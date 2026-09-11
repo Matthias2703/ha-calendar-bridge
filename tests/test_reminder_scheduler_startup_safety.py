@@ -18,11 +18,7 @@ from homeassistant.util import dt as dt_util
 from pytest_homeassistant_custom_component.common import async_fire_time_changed
 
 from custom_components.calendar_bridge.const import DOMAIN
-from custom_components.calendar_bridge.reminder_scheduler import (
-    _STALE_THRESHOLD,
-    _STORAGE_KEY,
-    ReminderScheduler,
-)
+from custom_components.calendar_bridge.reminder_scheduler import _STORAGE_KEY, ReminderScheduler
 
 
 def _overdue_reminder_data(age: timedelta) -> dict:
@@ -101,7 +97,8 @@ async def test_overdue_but_fresh_reminder_stays_in_the_store_until_sent(
     hass: HomeAssistant, enable_custom_integrations: None, hass_storage: dict
 ) -> None:
     hass.set_state(CoreState.not_running)
-    hass_storage[_STORAGE_KEY] = _overdue_reminder_data(timedelta(minutes=5))
+    stored = _overdue_reminder_data(timedelta(minutes=5))
+    hass_storage[_STORAGE_KEY] = stored
     hass.services.async_register("notify", "send_message", AsyncMock())
 
     assert await async_setup_component(hass, DOMAIN, {})
@@ -109,9 +106,7 @@ async def test_overdue_but_fresh_reminder_stays_in_the_store_until_sent(
 
     # Not sent yet (HA hasn't finished starting) -- must still be persisted,
     # or a crash right here would lose the reminder forever.
-    assert hass_storage[_STORAGE_KEY]["data"]["reminders"] == _overdue_reminder_data(
-        timedelta(minutes=5)
-    )["data"]["reminders"]
+    assert hass_storage[_STORAGE_KEY]["data"]["reminders"] == stored["data"]["reminders"]
 
 
 @pytest.mark.asyncio
