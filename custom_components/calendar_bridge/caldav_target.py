@@ -507,6 +507,11 @@ class CalDavCalendarTarget:
         # since EXDATE alone only suppresses the RRULE-generated instance.
         if existing_override is not None:
             instance_calendar.subcomponents.remove(existing_override)
+        # The new EXDATE's own TZID can differ from the master's (e.g. a
+        # non-IANA TZID icalendar remapped to its IANA equivalent while
+        # resolving the occurrence) -- same reasoning as the time-update
+        # path in _update_event.
+        _add_missing_timezones(instance_calendar)
         try:
             event.save()
         except caldav.lib.error.PutError:
