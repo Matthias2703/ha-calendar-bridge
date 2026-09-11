@@ -39,6 +39,8 @@ Configuration happens entirely through the UI (Settings → Devices & Services �
 2. Pick the calendar(s) you want to expose as targets — each becomes its own device.
 3. Add more calendars to an existing account later via "Add calendar" on the device card.
 
+Each calendar also has a **"Backfill reminders onto external events"** option (in the "Add calendar"/"Edit calendar defaults" dialog), off by default. On, the periodic poll also adds the default reminder to events it finds that weren't created through Home Assistant — added directly in the Google or iOS Calendar app, or an accepted invitation. Existing calendars change behavior with this release: that automatic backfill for externally-created events is now off until you turn the option on; reminders it already backfilled before stay as they are.
+
 ## Usage
 
 ```yaml
