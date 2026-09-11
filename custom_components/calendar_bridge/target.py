@@ -95,6 +95,24 @@ def as_utc(value: datetime | date) -> datetime | date:
     return value
 
 
+def event_starts_match(a: datetime | date, b: datetime | date) -> bool:
+    """True iff `a` and `b` are the exact same event start.
+
+    Shared by both backends' reactive-backfill matching (see
+    `google_target.py`/`caldav_target.py`): a timed value is compared as an
+    instant via `as_utc` -- an already tz-aware value converts straight to
+    UTC, a naive/floating one (a CalDAV floating DTSTART, or a naive
+    service-call datetime) is interpreted in HA's own configured time zone
+    first, so values from either source compare correctly against each
+    other. An all-day value compares as a plain calendar date. A timed value
+    never matches an all-day one, even if their instants would coincide
+    (e.g. midnight UTC) -- they describe different kinds of events.
+    """
+    if isinstance(a, datetime) != isinstance(b, datetime):
+        return False
+    return as_utc(a) == as_utc(b)
+
+
 def effective_reminder_minutes(all_day: bool, minutes_before: int, time_of_day: time | None) -> int:
     """Translate `minutes_before` into "minutes before midnight of the start date".
 
