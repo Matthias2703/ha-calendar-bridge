@@ -131,9 +131,25 @@ def _has_reminder_override(event: GoogleEvent) -> bool:
     Doesn't decide "has a reminder at all" by itself: `useDefault: true` (or
     a missing `reminders`, which Google also treats as `useDefault: true`)
     means the calendar's own default reminders apply instead, which may or
-    may not be empty -- see `_async_default_reminders_are_empty`.
+    may not be empty -- see `_async_default_reminders_are_empty`. A
+    `useDefault: false` event with an *empty* overrides list is neither case
+    -- see `_uses_calendar_default_reminders`.
     """
     return bool(event.reminders and not event.reminders.use_default and event.reminders.overrides)
+
+
+def _uses_calendar_default_reminders(event: GoogleEvent) -> bool:
+    """Whether `event` defers to the calendar's own default reminders.
+
+    True for `useDefault: true` or a missing `reminders` field -- the only
+    two cases where the calendar's default reminders actually apply, so
+    they're the only ones that need `_async_default_reminders_are_empty`.
+    `useDefault: false` with an empty overrides list is Google's explicit
+    "no reminder at all" state (distinct from deferring to the calendar
+    defaults) and must never be routed through that lookup, regardless of
+    what the calendar's own defaults are.
+    """
+    return not event.reminders or event.reminders.use_default
 
 
 def _is_series_event(event: GoogleEvent) -> bool:
@@ -331,12 +347,14 @@ class GoogleCalendarTarget:
             for event in matches:
                 if _has_reminder_override(event):
                     continue
-                if default_reminders_empty is None:
-                    default_reminders_empty = await _async_default_reminders_are_empty(
-                        auth, calendar_ref
-                    )
-                if default_reminders_empty:
-                    candidates.append(event)
+                if _uses_calendar_default_reminders(event):
+                    if default_reminders_empty is None:
+                        default_reminders_empty = await _async_default_reminders_are_empty(
+                            auth, calendar_ref
+                        )
+                    if not default_reminders_empty:
+                        continue
+                candidates.append(event)
 
             if len(candidates) != 1:
                 _LOGGER.debug("No single matching reminder-less event found to backfill")
@@ -396,24 +414,25 @@ class GoogleCalendarTarget:
                     seen.add(SeenEvent(uid=uid, summary=event.summary, start=event.start.value))
                     if uid in known_uids or skip_backfill or _has_reminder_override(event):
                         continue
-                    if not default_reminders_lookup_attempted:
-                        default_reminders_lookup_attempted = True
-                        try:
-                            default_reminders_empty = await _async_default_reminders_are_empty(
-                                auth, calendar_ref
-                            )
-                        except ApiException:
-                            # Only this event's backfill is skipped -- an
-                            # unrelated lookup failure must not lose the rest
-                            # of this poll's seen-baseline update (the outer
-                            # except below would return None for the whole
-                            # calendar instead).
-                            _LOGGER.warning(
-                                "Could not check the calendar's default reminders; "
-                                "skipping this event's backfill"
-                            )
-                    if not default_reminders_empty:
-                        continue
+                    if _uses_calendar_default_reminders(event):
+                        if not default_reminders_lookup_attempted:
+                            default_reminders_lookup_attempted = True
+                            try:
+                                default_reminders_empty = await _async_default_reminders_are_empty(
+                                    auth, calendar_ref
+                                )
+                            except ApiException:
+                                # Only this event's backfill is skipped -- an
+                                # unrelated lookup failure must not lose the
+                                # rest of this poll's seen-baseline update
+                                # (the outer except below would return None
+                                # for the whole calendar instead).
+                                _LOGGER.warning(
+                                    "Could not check the calendar's default reminders; "
+                                    "skipping this event's backfill"
+                                )
+                        if not default_reminders_empty:
+                            continue
                     event_all_day = event.start.date_time is None
                     effective_minutes = effective_reminder_minutes(
                         event_all_day, minutes_before, None

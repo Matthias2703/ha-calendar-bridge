@@ -916,7 +916,7 @@ async def test_poll_default_reminders_lookup_failure_skips_only_that_events_patc
 
 
 @pytest.mark.asyncio
-async def test_backfill_reminder_explicit_no_reminder_is_patched_without_checking_calendar_defaults():
+async def test_backfill_reminder_explicit_no_reminder_is_patched_without_calendar_lookup():
     # useDefault=false with an empty overrides list is an explicit "no
     # reminder at all" -- it must be treated as patchable on its own, without
     # ever consulting the calendar's default reminders (even non-empty ones).
@@ -935,7 +935,7 @@ async def test_backfill_reminder_explicit_no_reminder_is_patched_without_checkin
 
 
 @pytest.mark.asyncio
-async def test_poll_explicit_no_reminder_is_patched_without_checking_calendar_defaults():
+async def test_poll_explicit_no_reminder_is_patched_without_calendar_lookup():
     target = _make_target()
     event = _google_event("evt1", "Arzt", ical_uuid="uid-1", explicit_no_reminder=True)
     service = _FakeService([event])
