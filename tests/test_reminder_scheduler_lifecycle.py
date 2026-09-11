@@ -135,17 +135,12 @@ async def test_removing_a_subentry_immediately_purges_all_its_entries(
 ) -> None:
     entry = _make_entry()
     entry.add_to_hass(hass)
-    # switch.py/button.py/number.py's own (pre-existing, unrelated) entities
-    # each register their own update listener and read
-    # `entry.subentries[self._subentry_id]` unconditionally -- which crashes
-    # once `async_remove_subentry` has actually removed it, before those
-    # entities are themselves torn down. That's a real, separate bug (see
-    # the spawned follow-up task) with nothing to do with the reminder
-    # scheduler's own listener under test here, so those platforms are left
-    # out of this entry's setup entirely to isolate what this test checks.
-    with patch("custom_components.calendar_bridge.PLATFORMS", []):
-        assert await hass.config_entries.async_setup(entry.entry_id)
-        await hass.async_block_till_done()
+    # switch.py/button.py/number.py's own entities used to crash their update
+    # listeners here (fixed separately -- see test_subentry_removal_entities.py)
+    # -- no longer any reason to leave those platforms out of this entry's
+    # setup.
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
 
     scheduler: ReminderScheduler = hass.data[DOMAIN]["reminder_scheduler"]
     subentry_id = next(iter(entry.subentries))
