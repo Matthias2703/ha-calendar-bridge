@@ -345,7 +345,7 @@ async def test_cancelling_an_in_flight_delivery_task_leaves_the_scheduler_usable
         await task
 
     assert scheduler._lock.locked() is False
-    assert scheduler._sending == set()
+    assert scheduler._sending == {}
 
     # A following reconciliation for an unrelated calendar must run without
     # error -- no corrupted lock state left behind by the cancelled task.
