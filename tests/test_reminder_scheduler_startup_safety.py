@@ -113,7 +113,10 @@ async def test_overdue_reminder_waits_for_ha_to_finish_starting(
 
     hass.set_state(CoreState.running)
     hass.bus.async_fire(EVENT_HOMEASSISTANT_STARTED)
-    await hass.async_block_till_done()
+    # The actual send happens in a `_deliver` background task, spawned once
+    # `_apply` claims the entry -- `wait_background_tasks=True` is needed to
+    # wait for it too, not just the regular tasks HA already tracks (N5).
+    await hass.async_block_till_done(wait_background_tasks=True)
 
     send_mock.assert_called_once()
 
@@ -158,7 +161,10 @@ async def test_overdue_reminder_is_marked_sent_after_sending(
 
     hass.set_state(CoreState.running)
     hass.bus.async_fire(EVENT_HOMEASSISTANT_STARTED)
-    await hass.async_block_till_done()
+    # The actual send happens in a `_deliver` background task, spawned once
+    # `_apply` claims the entry -- `wait_background_tasks=True` is needed to
+    # wait for it too, not just the regular tasks HA already tracks (N5).
+    await hass.async_block_till_done(wait_background_tasks=True)
 
     send_mock.assert_called_once()
     # Decision E: a sent entry's marker stays in the store (it isn't
@@ -248,7 +254,10 @@ async def test_timer_fire_with_failing_send_retries_up_to_the_attempt_cap(
 
     freezer.move_to(fire_at + timedelta(seconds=1))
     async_fire_time_changed(hass, fire_at + timedelta(seconds=1))
-    await hass.async_block_till_done()
+    # The actual send happens in a `_deliver` background task, spawned once
+    # `_apply` claims the entry -- `wait_background_tasks=True` is needed to
+    # wait for it too, not just the regular tasks HA already tracks (N5).
+    await hass.async_block_till_done(wait_background_tasks=True)
 
     reminders = hass_storage[_STORAGE_KEY]["data"]["reminders"]
     assert len(reminders) == 1
@@ -257,12 +266,16 @@ async def test_timer_fire_with_failing_send_retries_up_to_the_attempt_cap(
     entry = next(r for r in scheduler._data["reminders"] if r["id"] == reminders[0]["id"])
     with caplog.at_level(logging.WARNING):
         for _ in range(MAX_SEND_ATTEMPTS - 1):
-            # `_apply`/`_send_now` are only ever called while `self._lock` is
-            # held (by whichever real entry point -- a timer or a
-            # reconciliation -- is driving them); `_send_now` releases it
-            # only around the notify call itself, so this must hold it too.
+            # `_apply` (only ever called while `self._lock` is held, by
+            # whichever real entry point -- a timer or a reconciliation --
+            # is driving it) just claims the entry now; the actual notify
+            # call and attempt bookkeeping happen in `_deliver`, spawned as
+            # a background task once the lock is released (N5).
             async with scheduler._lock:
-                await scheduler._apply(entry, dt_util.utcnow())
+                claimed = await scheduler._apply(entry, dt_util.utcnow())
+            assert claimed is not None
+            scheduler._spawn_delivery(claimed)
+            await hass.async_block_till_done(wait_background_tasks=True)
 
     assert entry["attempts"] == MAX_SEND_ATTEMPTS
     assert hass_storage[_STORAGE_KEY]["data"]["reminders"] == []

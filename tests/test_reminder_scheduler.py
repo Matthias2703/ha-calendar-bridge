@@ -90,13 +90,15 @@ async def test_pending_count_drops_a_reminder_once_it_fires():
     assert scheduler.pending_count("entry-1") == 1
     assert fire_callback is not None
 
-    async def _fake_send_now(reminder: dict) -> None:
-        # Stands in for the real send (which would hit `self._hass.states`/
-        # `notify.send_message` on a plain MagicMock hass) -- only the
-        # unschedule bookkeeping this test cares about matters here.
+    def _fake_claim(reminder: dict) -> None:
+        # Stands in for the real claim (which would hit `self._hass.states`/
+        # `notify.send_message` via a background `_deliver` task on a plain
+        # MagicMock hass) -- only the unschedule bookkeeping this test cares
+        # about matters here.
         scheduler._unschedule(reminder["id"])
+        return None
 
-    with patch.object(scheduler, "_send_now", AsyncMock(side_effect=_fake_send_now)):
+    with patch.object(scheduler, "_claim_for_delivery", MagicMock(side_effect=_fake_claim)):
         await fire_callback(fire_at)
 
     assert scheduler.pending_count("entry-1") == 0

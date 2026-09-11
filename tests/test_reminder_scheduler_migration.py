@@ -120,6 +120,10 @@ async def test_first_reconciliation_after_migration_adopts_overdue_as_sent_witho
             timedelta(days=365),
             render_notify_message,
         )
+    # The actual send happens in a `_deliver` background task, spawned once
+    # `_apply` claims the entry -- `wait_background_tasks=True` is needed to
+    # wait for it too, not just the regular tasks HA already tracks (N5).
+    await hass.async_block_till_done(wait_background_tasks=True)
 
     send_mock.assert_called_once()
 

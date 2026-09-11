@@ -16,6 +16,7 @@ further proof of the carryover mechanism itself.
 
 from __future__ import annotations
 
+import asyncio
 from datetime import timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -160,6 +161,19 @@ async def test_caldav_single_event_turning_into_series_carries_over_sent_flag(
 def _make_scheduler() -> ReminderScheduler:
     hass = MagicMock()
     hass.services.async_call = AsyncMock()
+    # A `_deliver` send is spawned via `hass.async_create_background_task`
+    # (N5) rather than awaited synchronously -- a bare `MagicMock()` would
+    # silently drop the coroutine instead of running it, so this wires it up
+    # to actually schedule a real task and keeps track of it for the test to
+    # await (`_drain`) once each reconciliation call returns.
+    hass.spawned_tasks: list[asyncio.Task] = []
+
+    def _spawn(coro: object, _name: str) -> asyncio.Task:
+        task = asyncio.ensure_future(coro)
+        hass.spawned_tasks.append(task)
+        return task
+
+    hass.async_create_background_task = MagicMock(side_effect=_spawn)
     with patch(
         "custom_components.calendar_bridge.reminder_scheduler._ReminderStore"
     ) as mock_store_cls:
@@ -168,6 +182,13 @@ def _make_scheduler() -> ReminderScheduler:
         mock_store.async_save = AsyncMock()
         scheduler = ReminderScheduler(hass)
     return scheduler
+
+
+async def _drain(scheduler: ReminderScheduler) -> None:
+    """Wait for every `_deliver` background task spawned so far to finish."""
+    tasks, scheduler._hass.spawned_tasks = scheduler._hass.spawned_tasks, []
+    if tasks:
+        await asyncio.gather(*tasks)
 
 
 @pytest.mark.asyncio
@@ -193,6 +214,7 @@ async def test_google_single_event_turning_into_series_carries_over_sent_flag() 
             timedelta(days=365),
             render_notify_message,
         )
+    await _drain(scheduler)
 
     assert scheduler._hass.services.async_call.call_count == 1
     bare_entries = [r for r in scheduler._data["reminders"] if r["instance_key"] == ical_uid]
@@ -216,6 +238,7 @@ async def test_google_single_event_turning_into_series_carries_over_sent_flag() 
             timedelta(days=365),
             render_notify_message,
         )
+    await _drain(scheduler)
 
     # No second notify call -- the `sent` marker carried over to the new key.
     assert scheduler._hass.services.async_call.call_count == 1

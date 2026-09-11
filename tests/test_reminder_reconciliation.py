@@ -1,15 +1,18 @@
-"""Scheduler-level tests for `ReminderScheduler`'s reconciliation, scheduling
-and concurrency-safety semantics: a moved single event keeps its stored
-reminder instead of getting a new one, an explicit reminder far outside a
-poll's own lookahead survives untouched, a firing timer and a concurrent
-reconciliation can't both send the same reminder, concurrent store mutations
-can't clobber each other, every `async_load` restart case is handled, and
-stale entries get pruned so the store can't grow forever.
+"""Scheduler-level tests for `ReminderScheduler`'s reconciliation and
+scheduling semantics: a moved single event keeps its stored reminder instead
+of getting a new one, an explicit reminder far outside a poll's own lookahead
+survives untouched, concurrent store mutations can't clobber each other,
+every `async_load` restart case is handled, and stale entries get pruned so
+the store can't grow forever.
 
 Uses a `ReminderScheduler` wired to a mocked `_ReminderStore` (no real HA
 Store I/O) and a mocked `hass` -- these are pure algorithm tests, independent
 of any backend or the periodic poller (already covered end-to-end elsewhere,
 e.g. `test_series_poll_notifications.py`, `test_reminder_scheduler_sent_carryover.py`).
+Send-path concurrency (a blocked notify call not stalling other work, a
+concurrent discard during an in-flight send) is covered with a real hass
+fixture in `test_reminder_scheduler_send_concurrency.py`, since it depends on
+genuine event-loop interleaving that a mocked `hass` can't exercise.
 """
 
 from __future__ import annotations
@@ -39,6 +42,18 @@ def europe_berlin_timezone():
 
 def _make_scheduler(hass: MagicMock | None = None) -> ReminderScheduler:
     hass = hass if hass is not None else MagicMock()
+    # A `_deliver` send is spawned via `hass.async_create_background_task`
+    # (N5) rather than awaited synchronously -- a bare `MagicMock()` would
+    # silently drop the coroutine instead of running it, so this wires it up
+    # to actually schedule a real task and keeps track of it for `_drain`.
+    hass.spawned_tasks: list[asyncio.Task] = []
+
+    def _spawn(coro: object, _name: str) -> asyncio.Task:
+        task = asyncio.ensure_future(coro)
+        hass.spawned_tasks.append(task)
+        return task
+
+    hass.async_create_background_task = MagicMock(side_effect=_spawn)
     with patch(
         "custom_components.calendar_bridge.reminder_scheduler._ReminderStore"
     ) as mock_store_cls:
@@ -47,6 +62,13 @@ def _make_scheduler(hass: MagicMock | None = None) -> ReminderScheduler:
         mock_store.async_save = AsyncMock()
         scheduler = ReminderScheduler(hass)
     return scheduler
+
+
+async def _drain(scheduler: ReminderScheduler) -> None:
+    """Wait for every `_deliver` background task spawned so far to finish."""
+    tasks, scheduler._hass.spawned_tasks = scheduler._hass.spawned_tasks, []
+    if tasks:
+        await asyncio.gather(*tasks)
 
 
 def _reminder(**overrides: object) -> dict:
@@ -161,41 +183,6 @@ async def test_explicit_entry_for_a_moved_single_event_stays_and_is_recomputed()
     assert entries[0]["sent"] is False
 
 
-# -- A firing timer and a concurrent reconciliation hitting the same --------
-# -- overdue entry must never both send.
-
-
-@pytest.mark.asyncio
-async def test_concurrent_timer_and_reconciliation_send_exactly_once():
-    # `_send_now` is only ever entered while `self._lock` is held (by
-    # whichever of its two callers, a firing timer or a reconciliation, got
-    # there first) -- it releases that same lock only around the actual
-    # notify call itself, so this exercises the two real entry points
-    # rather than calling the private method lock-less.
-    hass = MagicMock()
-
-    # A plain `AsyncMock()` resolves without ever yielding to the event loop
-    # (no real `await` inside it), so it would never actually let the two
-    # calls interleave -- an explicit yield point is needed to exercise the
-    # race for real.
-    async def _yield(*_args: object, **_kwargs: object) -> None:
-        await asyncio.sleep(0)
-
-    hass.services.async_call = AsyncMock(side_effect=_yield)
-    scheduler = _make_scheduler(hass)
-    reminder = _reminder()
-    scheduler._data["reminders"].append(reminder)
-
-    async def _call() -> None:
-        async with scheduler._lock:
-            await scheduler._send_now(reminder)
-
-    await asyncio.gather(_call(), _call())
-
-    assert hass.services.async_call.call_count == 1
-    assert reminder["sent"] is True
-
-
 # -- Interleaved store mutations must never clobber each other --------------
 
 
@@ -235,78 +222,6 @@ async def test_interleaved_reconciliation_and_explicit_schedule_both_persist():
 
     keys = {r["instance_key"] for r in scheduler._data["reminders"]}
     assert keys == {"cal-1", "exp-1"}
-
-
-@pytest.mark.asyncio
-async def test_a_concurrent_discard_during_an_in_flight_send_is_handled_safely():
-    # `_send_now` releases the lock for the duration of the actual notify
-    # call (a real one has no timeout under `blocking=True`, so holding the
-    # lock there would stall every other calendar's reconciliation) -- which
-    # means a second, concurrent reconciliation of the *same* subentry can
-    # now run while the first is still mid-send. If its own poll no longer
-    # sees the event at all, it discards the entry outright. The in-flight
-    # send must not crash or write stale data back once it resumes; it must
-    # simply find the entry gone and give up quietly.
-    hass = MagicMock()
-    unblock = asyncio.Event()
-
-    async def _blocking_send(*_args: object, **_kwargs: object) -> None:
-        await unblock.wait()
-
-    hass.services.async_call = AsyncMock(side_effect=_blocking_send)
-    scheduler = _make_scheduler(hass)
-
-    now = dt_util.utcnow()
-    overdue_event = SeenEvent(
-        uid="cal-1",
-        summary="Standup",
-        start=now + timedelta(minutes=10),
-        instance_key="cal-1",
-        series_uid="cal-1",
-    )
-
-    with patch(_TRACK_POINT_IN_TIME):
-        task1 = asyncio.create_task(
-            scheduler.async_reconcile_calendar(
-                "entry-1",
-                "sub-1",
-                ("notify.phone", 60, None),  # fire_at = start - 60min: already overdue
-                [overdue_event],
-                timedelta(days=365),
-                render_notify_message,
-            )
-        )
-        for _ in range(5):
-            if hass.services.async_call.called:
-                break
-            await asyncio.sleep(0)
-        assert hass.services.async_call.called  # task1 is now blocked inside the send
-
-        # A concurrent poll of the same subentry that no longer sees this
-        # event at all -- and, thanks to the lock being released around the
-        # blocked send, is now free to run and complete right away instead
-        # of being stuck behind it.
-        await asyncio.wait_for(
-            scheduler.async_reconcile_calendar(
-                "entry-1",
-                "sub-1",
-                ("notify.phone", 60, None),
-                [],
-                timedelta(days=365),
-                render_notify_message,
-            ),
-            timeout=1,
-        )
-        assert scheduler._data["reminders"] == []
-
-        unblock.set()
-        await task1
-
-    # Still just the one send attempt -- the in-flight send found its entry
-    # already gone once it resumed, and gave up quietly instead of writing
-    # a resurrected entry back or crashing.
-    assert hass.services.async_call.call_count == 1
-    assert scheduler._data["reminders"] == []
 
 
 # -- `async_load`'s four restart cases ---------------------------------------
@@ -502,6 +417,7 @@ async def test_prune_removes_a_sent_entry_that_stays_in_every_poll_result(freeze
             timedelta(days=365),
             render_notify_message,
         )
+    await _drain(scheduler)
     entries = [r for r in scheduler._data["reminders"] if r["instance_key"] == "evt-1"]
     assert len(entries) == 1
     assert entries[0]["sent"] is True
@@ -546,6 +462,7 @@ async def test_explicit_naive_start_does_not_resend_when_a_poll_reports_it_tz_aw
         await scheduler.async_schedule_explicit(
             "entry-1", "sub-1", "uid-1", "uid-1", "notify.phone", 60, "msg", naive_start
         )
+    await _drain(scheduler)
     assert hass.services.async_call.call_count == 1
 
     # The next poll reports the exact same instant, but resolved to an
@@ -558,5 +475,6 @@ async def test_explicit_naive_start_does_not_resend_when_a_poll_reports_it_tz_aw
         await scheduler.async_reconcile_calendar(
             "entry-1", "sub-1", None, [seen], timedelta(days=365), render_notify_message
         )
+    await _drain(scheduler)
 
     assert hass.services.async_call.call_count == 1

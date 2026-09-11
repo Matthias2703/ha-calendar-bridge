@@ -86,8 +86,25 @@ async def test_a_pending_explicit_reminder_still_fires_after_a_config_entry_relo
     assert await hass.config_entries.async_reload(entry.entry_id)
     await hass.async_block_till_done()
 
+    # The reminder's own timer must be independent of the periodic poll's
+    # own reconciliation -- even a poll that fails outright (a real backend
+    # error, not just "found nothing") must never prevent an already-
+    # rescheduled explicit reminder from firing on its own.
+    reloaded_entry = hass.config_entries.async_get_entry(entry.entry_id)
+    reloaded_entry.runtime_data.async_backfill_new_events = AsyncMock(
+        side_effect=RuntimeError("calendar unreachable")
+    )
+    poll_at = dt_util.utcnow() + timedelta(seconds=61)
+    freezer.move_to(poll_at)
+    async_fire_time_changed(hass, poll_at)
+    await hass.async_block_till_done()
+    send_mock.assert_not_called()  # the failed poll must not have sent anything either
+
     freezer.move_to(fire_at + timedelta(seconds=1))
     async_fire_time_changed(hass, fire_at + timedelta(seconds=1))
-    await hass.async_block_till_done()
+    # The actual send happens in a `_deliver` background task, spawned once
+    # `_apply` claims the entry -- `wait_background_tasks=True` is needed to
+    # wait for it too, not just the regular tasks HA already tracks (N5).
+    await hass.async_block_till_done(wait_background_tasks=True)
 
     send_mock.assert_called_once()
