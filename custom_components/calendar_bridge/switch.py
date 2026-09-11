@@ -40,8 +40,12 @@ class CalendarBridgeReminderSwitch(SwitchEntity):
     "popup" or "email" for Google), off means "none". An explicit reminder
     passed to calendar_bridge.create_event always wins regardless of this
     switch -- it only controls the default used for a call that doesn't
-    specify one, and what the reactive listener/poller backfill onto events
-    they catch.
+    specify one, and what the reactive HA-service listener backfills onto a
+    create_event call it catches (calendar.create_event, an automation, ...).
+    The periodic poll's own backfill onto events it found on its own (the
+    native "+" button, the Google/iOS app, an accepted invitation) is a
+    separate, off-by-default opt-in (`backfill_external_events`) -- this
+    switch does not control it.
     """
 
     _attr_has_entity_name = True

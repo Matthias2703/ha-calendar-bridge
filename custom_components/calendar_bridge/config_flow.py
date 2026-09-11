@@ -30,6 +30,7 @@ from homeassistant.helpers import selector
 
 from .caldav_target import CalDavAuthError, CalDavConnectionError, build_client, discover_calendars
 from .const import (
+    CONF_BACKFILL_EXTERNAL_EVENTS,
     CONF_CALENDAR_URL,
     CONF_DEFAULT_REMINDER_METHOD,
     CONF_DEFAULT_REMINDER_MINUTES,
@@ -40,6 +41,7 @@ from .const import (
     CONF_NOTIFY_MESSAGE_TEMPLATE,
     CONF_NOTIFY_MINUTES_BEFORE,
     CONF_NOTIFY_TARGET,
+    DEFAULT_BACKFILL_EXTERNAL_EVENTS,
     DEFAULT_NOTIFY_ENABLED,
     DEFAULT_NOTIFY_MINUTES_BEFORE,
     DEFAULT_REMINDER_METHOD,
@@ -98,6 +100,13 @@ def _reminder_defaults_schema(
         ),
         vol.Optional(
             CONF_DEFAULT_TARGET, default=defaults.get(CONF_DEFAULT_TARGET, False)
+        ): selector.BooleanSelector(),
+        # Off by default -- also patches events this integration didn't
+        # create itself (native "+" button, Google/iOS app, invitations) onto
+        # the periodic poll's backfill, not just the reminder-defaults above.
+        vol.Optional(
+            CONF_BACKFILL_EXTERNAL_EVENTS,
+            default=defaults.get(CONF_BACKFILL_EXTERNAL_EVENTS, DEFAULT_BACKFILL_EXTERNAL_EVENTS),
         ): selector.BooleanSelector(),
         # Independent of the reminder settings above: an HA-native
         # notification calendar_bridge schedules itself for every event it
@@ -301,6 +310,7 @@ class CalendarBridgeConfigFlow(ConfigFlow, domain=DOMAIN):
                         CONF_DISPLAY_NAME: choices[calendar_url],
                         CONF_DEFAULT_REMINDER_MINUTES: user_input[CONF_DEFAULT_REMINDER_MINUTES],
                         CONF_DEFAULT_REMINDER_METHOD: user_input[CONF_DEFAULT_REMINDER_METHOD],
+                        CONF_BACKFILL_EXTERNAL_EVENTS: user_input[CONF_BACKFILL_EXTERNAL_EVENTS],
                         # A multi-select batch must not mark every calendar in
                         # it as the default -- only the first one keeps it.
                         CONF_DEFAULT_TARGET: user_input[CONF_DEFAULT_TARGET] and index == 0,
@@ -389,6 +399,7 @@ class CalendarBridgeConfigFlow(ConfigFlow, domain=DOMAIN):
                         CONF_DISPLAY_NAME: choices[calendar_id],
                         CONF_DEFAULT_REMINDER_MINUTES: user_input[CONF_DEFAULT_REMINDER_MINUTES],
                         CONF_DEFAULT_REMINDER_METHOD: user_input[CONF_DEFAULT_REMINDER_METHOD],
+                        CONF_BACKFILL_EXTERNAL_EVENTS: user_input[CONF_BACKFILL_EXTERNAL_EVENTS],
                         # A multi-select batch must not mark every calendar in
                         # it as the default -- only the first one keeps it.
                         CONF_DEFAULT_TARGET: user_input[CONF_DEFAULT_TARGET] and index == 0,
@@ -484,6 +495,7 @@ class CalendarSubentryFlow(ConfigSubentryFlow):
                     CONF_DISPLAY_NAME: display_name,
                     CONF_DEFAULT_REMINDER_MINUTES: user_input[CONF_DEFAULT_REMINDER_MINUTES],
                     CONF_DEFAULT_REMINDER_METHOD: user_input[CONF_DEFAULT_REMINDER_METHOD],
+                    CONF_BACKFILL_EXTERNAL_EVENTS: user_input[CONF_BACKFILL_EXTERNAL_EVENTS],
                     CONF_DEFAULT_TARGET: user_input[CONF_DEFAULT_TARGET],
                     CONF_NOTIFY_ENABLED: user_input[CONF_NOTIFY_ENABLED],
                     CONF_NOTIFY_TARGET: user_input[CONF_NOTIFY_TARGET],

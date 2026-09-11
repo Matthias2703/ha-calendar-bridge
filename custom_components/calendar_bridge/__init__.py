@@ -27,6 +27,7 @@ from homeassistant.util import dt as dt_util
 
 from .caldav_target import CalDavCalendarTarget
 from .const import (
+    CONF_BACKFILL_EXTERNAL_EVENTS,
     CONF_CALENDAR_URL,
     CONF_DEFAULT_REMINDER_METHOD,
     CONF_DEFAULT_REMINDER_MINUTES,
@@ -36,6 +37,7 @@ from .const import (
     CONF_NOTIFY_MESSAGE_TEMPLATE,
     CONF_NOTIFY_MINUTES_BEFORE,
     CONF_NOTIFY_TARGET,
+    DEFAULT_BACKFILL_EXTERNAL_EVENTS,
     DEFAULT_NOTIFY_ENABLED,
     DEFAULT_NOTIFY_MINUTES_BEFORE,
     DOMAIN,
@@ -289,7 +291,17 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
                 # created while it was off looks "new" the moment it's turned
                 # back on. This only controls the backend's own VALARM/Google
                 # patch, not the independent HA notification below.
-                skip_backfill = method == REMINDER_METHOD_NONE or is_first_poll
+                # CONF_BACKFILL_EXTERNAL_EVENTS gates patching events this
+                # poller found on its own (native "+" button, the Google/iOS
+                # app, an accepted invitation) -- opt-in, since a subentry
+                # from before this option existed has no such key stored.
+                skip_backfill = (
+                    not subentry.data.get(
+                        CONF_BACKFILL_EXTERNAL_EVENTS, DEFAULT_BACKFILL_EXTERNAL_EVENTS
+                    )
+                    or method == REMINDER_METHOD_NONE
+                    or is_first_poll
+                )
                 known_before = seen_events.known_uids(calendar_ref)
                 try:
                     found: set[SeenEvent] | None = await target.async_backfill_new_events(
