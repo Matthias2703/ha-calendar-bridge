@@ -1207,6 +1207,48 @@ def _vevents(cal: icalendar.Calendar) -> list[icalendar.Event]:
     return [c for c in cal.subcomponents if isinstance(c, icalendar.Event)]
 
 
+def _mock_recurring_event_with_override(
+    uid: str,
+    master_start: datetime | date,
+    override_recurrence_id: datetime | date,
+    override_dtstart: datetime | date,
+    rrule: str = "FREQ=WEEKLY",
+    override_summary: str = "Standup (moved)",
+) -> MagicMock:
+    """A mock CalendarObjectResource wrapping a master plus one pre-existing override VEVENT."""
+    cal = icalendar.Calendar()
+    master = icalendar.Event()
+    master.add("uid", uid)
+    master.add("summary", "Standup")
+    master.add("dtstart", master_start)
+    master.add(
+        "dtend",
+        master_start + timedelta(minutes=30)
+        if isinstance(master_start, datetime)
+        else master_start + timedelta(days=1),
+    )
+    master.add("rrule", icalendar.vRecur.from_ical(rrule))
+    cal.add_component(master)
+
+    override = icalendar.Event()
+    override.add("uid", uid)
+    override.add("summary", override_summary)
+    override.add("recurrence-id", override_recurrence_id)
+    override.add("dtstart", override_dtstart)
+    override.add(
+        "dtend",
+        override_dtstart + timedelta(minutes=30)
+        if isinstance(override_dtstart, datetime)
+        else override_dtstart + timedelta(days=1),
+    )
+    cal.add_component(override)
+
+    mock_event = MagicMock()
+    mock_event.icalendar_instance = cal
+    mock_event.icalendar_component = master
+    return mock_event
+
+
 @pytest.mark.asyncio
 async def test_update_event_with_occurrence_creates_an_exception_vevent():
     target = _make_target()
@@ -1570,3 +1612,356 @@ async def test_backfill_reminder_does_not_match_a_different_instant(europe_berli
 
     assert patched is False
     event.save.assert_not_called()
+
+
+# --- B2: occurrence resolution (update/delete) ---
+
+
+@pytest.mark.asyncio
+async def test_update_event_finds_override_moved_two_days_via_original_start():
+    # (h) R3-05: an override moved +2 days must still be found by its
+    # original RECURRENCE-ID, not its now-different current DTSTART.
+    target = _make_target()
+    calendar_ref = "https://example.test/cal/"
+    mock_client, mock_calendar = _mock_client_with_calendar(calendar_ref)
+    original = datetime(2026, 10, 8, 9, 0, tzinfo=UTC)
+    moved = original + timedelta(days=2)
+    mock_event = _mock_recurring_event_with_override(
+        "series-1", datetime(2026, 10, 1, 9, 0, tzinfo=UTC), original, moved
+    )
+    mock_calendar.event_by_uid.return_value = mock_event
+
+    with patch(
+        "custom_components.calendar_bridge.caldav_target.build_client", return_value=mock_client
+    ):
+        updated = await target.async_update_event(
+            calendar_ref, "series-1", EventUpdate(location="Room 3"), occurrence=original
+        )
+
+    assert updated is True
+    vevents = _vevents(mock_event.icalendar_instance)
+    assert len(vevents) == 2  # still just master + the SAME override, no duplicate
+    override = next(v for v in vevents if "RECURRENCE-ID" in v)
+    assert override["recurrence-id"].dt == original
+    assert override["dtstart"].dt == moved  # its own moved time is untouched
+    assert str(override["location"]) == "Room 3"
+
+
+@pytest.mark.asyncio
+async def test_delete_event_finds_override_moved_two_days_via_original_start():
+    # (h) Same as above, for the delete path.
+    target = _make_target()
+    calendar_ref = "https://example.test/cal/"
+    mock_client, mock_calendar = _mock_client_with_calendar(calendar_ref)
+    original = datetime(2026, 10, 8, 9, 0, tzinfo=UTC)
+    moved = original + timedelta(days=2)
+    mock_event = _mock_recurring_event_with_override(
+        "series-1", datetime(2026, 10, 1, 9, 0, tzinfo=UTC), original, moved
+    )
+    mock_calendar.event_by_uid.return_value = mock_event
+
+    with patch(
+        "custom_components.calendar_bridge.caldav_target.build_client", return_value=mock_client
+    ):
+        deleted = await target.async_delete_event(calendar_ref, "series-1", occurrence=original)
+
+    assert deleted is True
+    vevents = _vevents(mock_event.icalendar_instance)
+    assert len(vevents) == 1  # override removed
+    master = vevents[0]
+    exdates = master.get("exdate")
+    exdates = exdates if isinstance(exdates, list) else [exdates]
+    assert [d.dt for prop in exdates for d in prop.dts] == [original]
+
+
+@pytest.mark.asyncio
+async def test_update_event_finds_override_moved_same_day_via_original_start():
+    # (i) A same-day move is still within the old +-1 day window, but the
+    # old comparison against the current (moved) DTSTART still fails.
+    target = _make_target()
+    calendar_ref = "https://example.test/cal/"
+    mock_client, mock_calendar = _mock_client_with_calendar(calendar_ref)
+    original = datetime(2026, 10, 8, 9, 0, tzinfo=UTC)
+    moved = datetime(2026, 10, 8, 14, 0, tzinfo=UTC)
+    mock_event = _mock_recurring_event_with_override(
+        "series-1", datetime(2026, 10, 1, 9, 0, tzinfo=UTC), original, moved
+    )
+    mock_calendar.event_by_uid.return_value = mock_event
+
+    with patch(
+        "custom_components.calendar_bridge.caldav_target.build_client", return_value=mock_client
+    ):
+        updated = await target.async_update_event(
+            calendar_ref, "series-1", EventUpdate(summary="Edited"), occurrence=original
+        )
+
+    assert updated is True
+    vevents = _vevents(mock_event.icalendar_instance)
+    assert len(vevents) == 2
+    override = next(v for v in vevents if "RECURRENCE-ID" in v)
+    assert override["recurrence-id"].dt == original
+    assert str(override["summary"]) == "Edited"
+
+
+@pytest.mark.asyncio
+async def test_second_update_after_a_move_reuses_the_same_override():
+    # (j) A second edit of an already-moved occurrence must find and change
+    # the existing override, never create a second one with the same
+    # RECURRENCE-ID.
+    target = _make_target()
+    calendar_ref = "https://example.test/cal/"
+    mock_client, mock_calendar = _mock_client_with_calendar(calendar_ref)
+    mock_event = _mock_recurring_event(
+        "series-1", datetime(2026, 10, 1, 9, 0, tzinfo=UTC), rrule="FREQ=WEEKLY"
+    )
+    mock_calendar.event_by_uid.return_value = mock_event
+    original = datetime(2026, 10, 8, 9, 0, tzinfo=UTC)
+    moved = datetime(2026, 10, 10, 9, 0, tzinfo=UTC)
+
+    with patch(
+        "custom_components.calendar_bridge.caldav_target.build_client", return_value=mock_client
+    ):
+        await target.async_update_event(
+            calendar_ref,
+            "series-1",
+            EventUpdate(start=moved, end=moved + timedelta(minutes=30)),
+            occurrence=original,
+        )
+        await target.async_update_event(
+            calendar_ref, "series-1", EventUpdate(location="Room 5"), occurrence=original
+        )
+
+    vevents = _vevents(mock_event.icalendar_instance)
+    assert len(vevents) == 2  # still master + ONE override
+    override = next(v for v in vevents if "RECURRENCE-ID" in v)
+    assert override["recurrence-id"].dt == original
+    assert override["dtstart"].dt == moved
+    assert str(override["location"]) == "Room 5"
+
+
+@pytest.mark.asyncio
+async def test_delete_occurrence_with_existing_override_tzid_master():
+    # (k) Deleting an occurrence with an existing override removes that
+    # override and sets an EXDATE matching the TZID master's own form.
+    target = _make_target()
+    calendar_ref = "https://example.test/cal/"
+    mock_client, mock_calendar = _mock_client_with_calendar(calendar_ref)
+    berlin = ZoneInfo("Europe/Berlin")
+    original = datetime(2026, 10, 8, 9, 0, tzinfo=berlin)
+    moved = datetime(2026, 10, 8, 14, 0, tzinfo=berlin)
+    mock_event = _mock_recurring_event_with_override(
+        "series-1",
+        datetime(2026, 10, 1, 9, 0, tzinfo=berlin),
+        original,
+        moved,
+        rrule="FREQ=WEEKLY",
+    )
+    mock_calendar.event_by_uid.return_value = mock_event
+
+    with patch(
+        "custom_components.calendar_bridge.caldav_target.build_client", return_value=mock_client
+    ):
+        deleted = await target.async_delete_event(calendar_ref, "series-1", occurrence=original)
+
+    assert deleted is True
+    vevents = _vevents(mock_event.icalendar_instance)
+    assert len(vevents) == 1  # override removed
+    master = vevents[0]
+    exdates = master.get("exdate")
+    exdates = exdates if isinstance(exdates, list) else [exdates]
+    exdate_values = [d.dt for prop in exdates for d in prop.dts]
+    assert exdate_values == [original]
+    assert exdate_values[0].tzinfo == berlin
+
+
+@pytest.mark.asyncio
+async def test_delete_occurrence_with_existing_override_all_day_master():
+    # (k) Same, for an all-day (DATE-valued) master.
+    target = _make_target()
+    calendar_ref = "https://example.test/cal/"
+    mock_client, mock_calendar = _mock_client_with_calendar(calendar_ref)
+    original = date(2026, 10, 8)
+    moved = date(2026, 10, 9)
+    mock_event = _mock_recurring_event_with_override(
+        "series-1", date(2026, 10, 1), original, moved, rrule="FREQ=WEEKLY"
+    )
+    mock_calendar.event_by_uid.return_value = mock_event
+
+    with patch(
+        "custom_components.calendar_bridge.caldav_target.build_client", return_value=mock_client
+    ):
+        deleted = await target.async_delete_event(calendar_ref, "series-1", occurrence=original)
+
+    assert deleted is True
+    vevents = _vevents(mock_event.icalendar_instance)
+    assert len(vevents) == 1
+    master = vevents[0]
+    exdates = master.get("exdate")
+    exdates = exdates if isinstance(exdates, list) else [exdates]
+    exdate_values = [d.dt for prop in exdates for d in prop.dts]
+    assert exdate_values == [original]
+    assert all(isinstance(v, date) and not isinstance(v, datetime) for v in exdate_values)
+
+
+@pytest.mark.asyncio
+async def test_new_override_at_tzid_master_keeps_the_same_tzid():
+    # (l) A first-time (non-moved) override at a TZID master keeps that TZID.
+    target = _make_target()
+    calendar_ref = "https://example.test/cal/"
+    mock_client, mock_calendar = _mock_client_with_calendar(calendar_ref)
+    berlin = ZoneInfo("Europe/Berlin")
+    mock_event = _mock_recurring_event(
+        "series-1", datetime(2026, 10, 1, 9, 0, tzinfo=berlin), rrule="FREQ=WEEKLY"
+    )
+    mock_calendar.event_by_uid.return_value = mock_event
+    occurrence = datetime(2026, 10, 8, 9, 0, tzinfo=berlin)
+
+    with patch(
+        "custom_components.calendar_bridge.caldav_target.build_client", return_value=mock_client
+    ):
+        updated = await target.async_update_event(
+            calendar_ref, "series-1", EventUpdate(location="Room 9"), occurrence=occurrence
+        )
+
+    assert updated is True
+    exception = next(v for v in _vevents(mock_event.icalendar_instance) if "RECURRENCE-ID" in v)
+    assert exception["recurrence-id"].dt.tzinfo == berlin
+    assert exception["dtstart"].dt.tzinfo == berlin
+
+
+@pytest.mark.asyncio
+async def test_update_event_occurrence_excluded_by_exdate_no_mutation():
+    # (m) An EXDATE-excluded slot doesn't exist -- no override, no mutation.
+    target = _make_target()
+    calendar_ref = "https://example.test/cal/"
+    mock_client, mock_calendar = _mock_client_with_calendar(calendar_ref)
+    mock_event = _mock_recurring_event(
+        "series-1", datetime(2026, 10, 1, 9, 0, tzinfo=UTC), rrule="FREQ=WEEKLY"
+    )
+    excluded = datetime(2026, 10, 8, 9, 0, tzinfo=UTC)
+    mock_event.icalendar_component.add("exdate", excluded)
+
+    with patch(
+        "custom_components.calendar_bridge.caldav_target.build_client", return_value=mock_client
+    ):
+        updated = await target.async_update_event(
+            calendar_ref, "series-1", EventUpdate(summary="Edited"), occurrence=excluded
+        )
+
+    assert updated is False
+    mock_event.save.assert_not_called()
+    assert len(_vevents(mock_event.icalendar_instance)) == 1
+
+
+@pytest.mark.asyncio
+async def test_update_event_naive_occurrence_matches_tzid_master(europe_berlin_timezone):
+    # (n) A naive occurrence is interpreted in HA's own configured timezone
+    # and must still match a TZID master via event_starts_match.
+    target = _make_target()
+    calendar_ref = "https://example.test/cal/"
+    mock_client, mock_calendar = _mock_client_with_calendar(calendar_ref)
+    berlin = ZoneInfo("Europe/Berlin")
+    mock_event = _mock_recurring_event(
+        "series-1", datetime(2026, 10, 1, 9, 0, tzinfo=berlin), rrule="FREQ=WEEKLY"
+    )
+    mock_calendar.event_by_uid.return_value = mock_event
+    naive_occurrence = datetime(2026, 10, 8, 9, 0)
+
+    with patch(
+        "custom_components.calendar_bridge.caldav_target.build_client", return_value=mock_client
+    ):
+        updated = await target.async_update_event(
+            calendar_ref, "series-1", EventUpdate(location="Room 7"), occurrence=naive_occurrence
+        )
+
+    assert updated is True
+    exception = next(v for v in _vevents(mock_event.icalendar_instance) if "RECURRENCE-ID" in v)
+    assert exception["recurrence-id"].dt == datetime(2026, 10, 8, 9, 0, tzinfo=berlin)
+
+
+@pytest.mark.asyncio
+async def test_update_regular_monday_when_tuesday_override_collides_at_monday_time():
+    # (o) A Tuesday instance was moved to Monday 09:00 -- updating the
+    # regular Monday occurrence must create its own new override (keyed by
+    # the *regular* Monday's RECURRENCE-ID), never reuse or touch the
+    # Tuesday override just because its current DTSTART also lands on Monday.
+    target = _make_target()
+    calendar_ref = "https://example.test/cal/"
+    mock_client, mock_calendar = _mock_client_with_calendar(calendar_ref)
+    monday = datetime(2026, 10, 5, 9, 0, tzinfo=UTC)  # 2026-10-05 is a Monday
+    tuesday_original = datetime(2026, 10, 6, 9, 0, tzinfo=UTC)
+    mock_event = _mock_recurring_event_with_override(
+        "series-1", monday, tuesday_original, monday, rrule="FREQ=WEEKLY;BYDAY=MO,TU"
+    )
+    mock_calendar.event_by_uid.return_value = mock_event
+
+    with patch(
+        "custom_components.calendar_bridge.caldav_target.build_client", return_value=mock_client
+    ):
+        updated = await target.async_update_event(
+            calendar_ref, "series-1", EventUpdate(location="Room 1"), occurrence=monday
+        )
+
+    assert updated is True
+    vevents = _vevents(mock_event.icalendar_instance)
+    assert len(vevents) == 3  # master + untouched Tuesday-override + new Monday-override
+    tuesday_override = next(
+        v for v in vevents if "RECURRENCE-ID" in v and v["recurrence-id"].dt == tuesday_original
+    )
+    assert "location" not in tuesday_override
+    monday_override = next(
+        v for v in vevents if "RECURRENCE-ID" in v and v["recurrence-id"].dt == monday
+    )
+    assert str(monday_override["location"]) == "Room 1"
+
+
+@pytest.mark.asyncio
+async def test_new_override_and_exdate_match_floating_master_value_type():
+    # (p) A floating (no-tzinfo) master's new override keeps that same
+    # floating/naive value type.
+    target = _make_target()
+    calendar_ref = "https://example.test/cal/"
+    mock_client, mock_calendar = _mock_client_with_calendar(calendar_ref)
+    mock_event = _mock_recurring_event(
+        "series-1", datetime(2026, 10, 1, 9, 0), rrule="FREQ=WEEKLY"
+    )
+    mock_calendar.event_by_uid.return_value = mock_event
+    occurrence = datetime(2026, 10, 8, 9, 0)
+
+    with patch(
+        "custom_components.calendar_bridge.caldav_target.build_client", return_value=mock_client
+    ):
+        updated = await target.async_update_event(
+            calendar_ref, "series-1", EventUpdate(location="Room 2"), occurrence=occurrence
+        )
+
+    assert updated is True
+    exception = next(v for v in _vevents(mock_event.icalendar_instance) if "RECURRENCE-ID" in v)
+    assert exception["recurrence-id"].dt.tzinfo is None
+    assert exception["dtstart"].dt.tzinfo is None
+
+
+@pytest.mark.asyncio
+async def test_new_override_and_exdate_match_utc_master_value_type():
+    # (p) A UTC master's new EXDATE keeps the UTC form.
+    target = _make_target()
+    calendar_ref = "https://example.test/cal/"
+    mock_client, mock_calendar = _mock_client_with_calendar(calendar_ref)
+    mock_event = _mock_recurring_event(
+        "series-1", datetime(2026, 10, 1, 9, 0, tzinfo=UTC), rrule="FREQ=WEEKLY"
+    )
+    mock_calendar.event_by_uid.return_value = mock_event
+    occurrence = datetime(2026, 10, 8, 9, 0, tzinfo=UTC)
+
+    with patch(
+        "custom_components.calendar_bridge.caldav_target.build_client", return_value=mock_client
+    ):
+        deleted = await target.async_delete_event(calendar_ref, "series-1", occurrence=occurrence)
+
+    assert deleted is True
+    master = _vevents(mock_event.icalendar_instance)[0]
+    exdates = master.get("exdate")
+    exdates = exdates if isinstance(exdates, list) else [exdates]
+    exdate_values = [d.dt for prop in exdates for d in prop.dts]
+    assert exdate_values == [occurrence]
+    assert exdate_values[0].tzinfo == UTC

@@ -155,6 +155,49 @@ def _auth_finding_instances(master_id: str, instance_items: list[dict[str, Any]]
     return auth
 
 
+def _auth_finding_items(items: list[dict[str, Any]]) -> AsyncMock:
+    """A fake auth whose iCalUID lookup resolves to `items` (single page)."""
+    auth = AsyncMock()
+    auth.get_json = AsyncMock(return_value={"items": items})
+    return auth
+
+
+def _auth_paged_icaluid(pages: list[list[dict[str, Any]]]) -> AsyncMock:
+    """A fake auth whose iCalUID lookup paginates through `pages` via nextPageToken."""
+    auth = AsyncMock()
+    state = {"page": 0}
+
+    async def get_json(url: str, params: dict[str, Any] | None = None, **kwargs: Any):
+        idx = state["page"]
+        state["page"] += 1
+        result: dict[str, Any] = {"items": pages[idx] if idx < len(pages) else []}
+        if idx + 1 < len(pages):
+            result["nextPageToken"] = f"page{idx + 2}"
+        return result
+
+    auth.get_json = AsyncMock(side_effect=get_json)
+    return auth
+
+
+def _auth_finding_instances_paged(master_id: str, pages: list[list[dict[str, Any]]]) -> AsyncMock:
+    """A fake auth: iCalUID lookup resolves to master_id, /instances paginates through `pages`."""
+    auth = AsyncMock()
+    state = {"page": 0}
+
+    async def get_json(url: str, params: dict[str, Any] | None = None, **kwargs: Any):
+        if "/instances" not in url:
+            return {"items": [{"id": master_id}]}
+        idx = state["page"]
+        state["page"] += 1
+        result: dict[str, Any] = {"items": pages[idx] if idx < len(pages) else []}
+        if idx + 1 < len(pages):
+            result["nextPageToken"] = f"page{idx + 2}"
+        return result
+
+    auth.get_json = AsyncMock(side_effect=get_json)
+    return auth
+
+
 @pytest.mark.asyncio
 async def test_create_event_posts_the_built_body_and_returns_the_ical_uid():
     target = _make_target()
@@ -1165,3 +1208,160 @@ async def test_poll_series_sibling_instance_known_skips_lookup_and_adds_master_b
     master_entries = [s for s in seen if s.uid == "M"]
     assert len(master_entries) == 1
     assert master_entries[0].suppress_notification is True
+
+
+# --- B2: uid/occurrence resolution (update/delete) ---
+
+
+@pytest.mark.asyncio
+async def test_delete_event_uid_lookup_finds_master_among_an_exception():
+    # (a) The response order between a series' exceptions and its master is
+    # unspecified -- items[0] must never be assumed to be the master.
+    target = _make_target()
+    service = _FakeService()
+    items = [
+        {"id": "exception1", "recurringEventId": "M"},
+        {"id": "M"},
+    ]
+    auth = _auth_finding_items(items)
+
+    with _patched(target, service, auth):
+        deleted = await target.async_delete_event(_CALENDAR_REF, "series-uid")
+
+    assert deleted is True
+    service.async_delete_event.assert_awaited_once_with(_CALENDAR_REF, "M")
+
+
+@pytest.mark.asyncio
+async def test_delete_event_uid_lookup_only_exceptions_no_mutation():
+    # (b) No item without a recurringEventId at all -- refuse rather than
+    # delete/patch a mere exception in place of the series or single event.
+    target = _make_target()
+    service = _FakeService()
+    items = [
+        {"id": "exception1", "recurringEventId": "M"},
+        {"id": "exception2", "recurringEventId": "M"},
+    ]
+    auth = _auth_finding_items(items)
+
+    with _patched(target, service, auth):
+        deleted = await target.async_delete_event(_CALENDAR_REF, "series-uid")
+
+    assert deleted is False
+    service.async_delete_event.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_delete_event_uid_lookup_ambiguous_no_recurring_event_id_no_mutation():
+    # (c) Two candidates without a recurringEventId -- ambiguous, refuse.
+    target = _make_target()
+    service = _FakeService()
+    items = [{"id": "master1"}, {"id": "master2"}]
+    auth = _auth_finding_items(items)
+
+    with _patched(target, service, auth):
+        deleted = await target.async_delete_event(_CALENDAR_REF, "series-uid")
+
+    assert deleted is False
+    service.async_delete_event.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_delete_event_uid_lookup_master_on_second_page():
+    # (d) The iCalUID lookup must page through nextPageToken fully -- a
+    # single-request lookup can miss the master entirely.
+    target = _make_target()
+    service = _FakeService()
+    page1 = [{"id": "exception1", "recurringEventId": "M"}]
+    page2 = [{"id": "M"}]
+    auth = _auth_paged_icaluid([page1, page2])
+
+    with _patched(target, service, auth):
+        deleted = await target.async_delete_event(_CALENDAR_REF, "series-uid")
+
+    assert deleted is True
+    service.async_delete_event.assert_awaited_once_with(_CALENDAR_REF, "M")
+
+
+@pytest.mark.asyncio
+async def test_update_event_with_occurrence_instance_on_second_page():
+    # (e) events.instances must page through nextPageToken fully. Also
+    # verifies that `originalStart` is never sent -- its query format isn't
+    # documented, and a wrong value would silently filter out the correct
+    # instance server-side without a mock test ever catching it.
+    target = _make_target()
+    occurrence = datetime(2026, 10, 3, 9, 0, tzinfo=UTC)
+    service = _FakeService()
+    page1 = [{"id": "other1", "originalStartTime": {"dateTime": "2026-10-01T09:00:00Z"}}]
+    page2 = [
+        {
+            "id": "master1_20261003T090000Z",
+            "originalStartTime": {"dateTime": "2026-10-03T09:00:00Z"},
+        }
+    ]
+    auth = _auth_finding_instances_paged("master1", [page1, page2])
+
+    with _patched(target, service, auth):
+        updated = await target.async_update_event(
+            _CALENDAR_REF, "series-uid", EventUpdate(summary="Moved"), occurrence=occurrence
+        )
+
+    assert updated is True
+    service.async_patch_event.assert_awaited_once_with(
+        _CALENDAR_REF, "master1_20261003T090000Z", {"summary": "Moved"}
+    )
+    for call in auth.get_json.call_args_list:
+        params = call.kwargs.get("params") or {}
+        assert "originalStart" not in params
+
+
+@pytest.mark.asyncio
+async def test_update_event_with_occurrence_matches_via_original_start_not_current_time():
+    # (f) A since-rescheduled instance is still identified by its
+    # originalStartTime, not its now-different current start.
+    target = _make_target()
+    occurrence = datetime(2026, 10, 3, 9, 0, tzinfo=UTC)
+    service = _FakeService()
+    instance_items = [
+        {
+            "id": "master1_20261003T090000Z",
+            "originalStartTime": {"dateTime": "2026-10-03T09:00:00Z"},
+            "start": {"dateTime": "2026-10-03T14:00:00Z"},
+        },
+    ]
+    auth = _auth_finding_instances("master1", instance_items)
+
+    with _patched(target, service, auth):
+        updated = await target.async_update_event(
+            _CALENDAR_REF, "series-uid", EventUpdate(summary="Renamed"), occurrence=occurrence
+        )
+
+    assert updated is True
+    service.async_patch_event.assert_awaited_once_with(
+        _CALENDAR_REF, "master1_20261003T090000Z", {"summary": "Renamed"}
+    )
+
+
+@pytest.mark.asyncio
+async def test_update_event_with_occurrence_all_day_date_matches():
+    # (g) An all-day series' occurrence is identified by date, not datetime.
+    target = _make_target()
+    occurrence = date(2026, 10, 3)
+    service = _FakeService()
+    instance_items = [
+        {
+            "id": "master1_20261003",
+            "originalStartTime": {"date": "2026-10-03"},
+        },
+    ]
+    auth = _auth_finding_instances("master1", instance_items)
+
+    with _patched(target, service, auth):
+        updated = await target.async_update_event(
+            _CALENDAR_REF, "series-uid", EventUpdate(summary="Renamed"), occurrence=occurrence
+        )
+
+    assert updated is True
+    service.async_patch_event.assert_awaited_once_with(
+        _CALENDAR_REF, "master1_20261003", {"summary": "Renamed"}
+    )
