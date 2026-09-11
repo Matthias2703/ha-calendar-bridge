@@ -533,13 +533,33 @@ class GoogleCalendarTarget:
         `post_json` call already does. Returns the full item (not just its
         `id`) so callers that need the event's current state can reuse this
         response instead of a second `events.get` round trip.
+
+        A series' master and every one of its exceptions share the same
+        iCalUID (Google's own documented behavior), and the response order is
+        unspecified -- so this fully pages through `nextPageToken` and picks
+        the *one* item with no `recurringEventId` (the master, or a
+        standalone single event). 0 such items (only exceptions came back) or
+        more than 1 (ambiguous) refuses to mutate anything.
         """
-        response = await auth.get_json(
-            CALENDAR_EVENTS_URL.format(calendar_id=quote(calendar_ref, safe="")),
-            params={"iCalUID": uid},
-        )
-        items = response.get("items") or []
-        return cast(dict[str, Any], items[0]) if items else None
+        items: list[dict[str, Any]] = []
+        page_token: str | None = None
+        while True:
+            params: dict[str, Any] = {"iCalUID": uid}
+            if page_token:
+                params["pageToken"] = page_token
+            response = await auth.get_json(
+                CALENDAR_EVENTS_URL.format(calendar_id=quote(calendar_ref, safe="")),
+                params=params,
+            )
+            items.extend(response.get("items") or [])
+            page_token = response.get("nextPageToken")
+            if not page_token:
+                break
+        candidates = [item for item in items if not item.get("recurringEventId")]
+        if len(candidates) != 1:
+            _LOGGER.debug("No single matching master/standalone event found for the given iCalUID")
+            return None
+        return candidates[0]
 
     async def _async_find_instance(
         self,
@@ -554,7 +574,14 @@ class GoogleCalendarTarget:
         distinct from the master's -- `events.instances` (not wrapped by
         `GoogleCalendarService`, hence the raw request) is the documented way
         to list them and find the one whose original start matches
-        `occurrence`.
+        `occurrence`. Fully pages through `nextPageToken` -- the default page
+        size (250) can be smaller than a long-running series' instance count
+        in a wide search window. `events.instances` also documents an
+        `originalStart` filter parameter, but its accepted format isn't
+        specified anywhere; a wrong guess would silently filter the correct
+        instance out server-side without a mock-based test ever catching it,
+        so it's deliberately not used here -- matching is done exclusively
+        via `originalStartTime` on the returned items.
         """
         occurrence_dt = _as_utc_datetime(occurrence)
         # `timeMin`/`timeMax` bound each instance's *current* (possibly
@@ -565,32 +592,42 @@ class GoogleCalendarTarget:
         # it. A wide window keeps that working for any realistic reschedule;
         # the actual match below is still exact, via `originalStartTime`.
         window = timedelta(days=365)
-        response = await auth.get_json(
-            INSTANCES_URL.format(
-                calendar_id=quote(calendar_ref, safe=""), event_id=quote(master_event_id, safe="")
-            ),
-            params={
+        page_token: str | None = None
+        while True:
+            params: dict[str, Any] = {
                 "timeMin": (occurrence_dt - window).isoformat(),
                 "timeMax": (occurrence_dt + window).isoformat(),
-            },
-        )
-        for item in response.get("items") or []:
-            original_start = item.get("originalStartTime") or {}
-            raw = original_start.get("dateTime") or original_start.get("date")
-            if not raw:
-                continue
-            parsed = dt_util.parse_datetime(raw) or dt_util.parse_date(raw)
-            if parsed is None:
-                continue
-            if isinstance(parsed, datetime):
-                matches = dt_util.as_utc(parsed) == occurrence_dt
-            else:
-                occurrence_date = (
-                    occurrence.date() if isinstance(occurrence, datetime) else occurrence
-                )
-                matches = parsed == occurrence_date
-            if matches:
-                return cast(dict[str, Any], item)
+            }
+            if page_token:
+                params["pageToken"] = page_token
+            response = await auth.get_json(
+                INSTANCES_URL.format(
+                    calendar_id=quote(calendar_ref, safe=""),
+                    event_id=quote(master_event_id, safe=""),
+                ),
+                params=params,
+            )
+            for item in response.get("items") or []:
+                original_start = item.get("originalStartTime") or {}
+                # `dateTime`/`date` are mutually exclusive on this object
+                # (same shape as a plain `start`/`end`) -- decide the value
+                # type from *which* field is present rather than trying
+                # `parse_datetime` first, which happily (and wrongly) parses
+                # a bare "YYYY-MM-DD" date string into a midnight datetime.
+                parsed: datetime | date | None
+                if raw_dt := original_start.get("dateTime"):
+                    parsed = dt_util.parse_datetime(raw_dt)
+                elif raw_date := original_start.get("date"):
+                    parsed = dt_util.parse_date(raw_date)
+                else:
+                    parsed = None
+                if parsed is None:
+                    continue
+                if event_starts_match(parsed, occurrence):
+                    return cast(dict[str, Any], item)
+            page_token = response.get("nextPageToken")
+            if not page_token:
+                break
         return None
 
     async def _async_resolve_event(

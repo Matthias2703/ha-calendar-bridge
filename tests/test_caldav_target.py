@@ -1922,9 +1922,7 @@ async def test_new_override_and_exdate_match_floating_master_value_type():
     target = _make_target()
     calendar_ref = "https://example.test/cal/"
     mock_client, mock_calendar = _mock_client_with_calendar(calendar_ref)
-    mock_event = _mock_recurring_event(
-        "series-1", datetime(2026, 10, 1, 9, 0), rrule="FREQ=WEEKLY"
-    )
+    mock_event = _mock_recurring_event("series-1", datetime(2026, 10, 1, 9, 0), rrule="FREQ=WEEKLY")
     mock_calendar.event_by_uid.return_value = mock_event
     occurrence = datetime(2026, 10, 8, 9, 0)
 

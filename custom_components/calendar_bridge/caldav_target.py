@@ -463,20 +463,13 @@ class CalDavCalendarTarget:
         resolved = self._resolve_occurrence(instance_calendar, occurrence)
         if resolved is None:
             return False
-        occurrence_start, _occurrence_end = resolved
-        master.add("exdate", occurrence_start)
+        recurrence_id, _start, _end, existing_override = resolved
+        master.add("exdate", recurrence_id)
         # An occurrence being deleted might already have its own exception
         # (RECURRENCE-ID) VEVENT from a prior update_event -- drop that too,
         # since EXDATE alone only suppresses the RRULE-generated instance.
-        instance_calendar.subcomponents = [
-            c
-            for c in instance_calendar.subcomponents
-            if not (
-                isinstance(c, icalendar.Event)
-                and "RECURRENCE-ID" in c
-                and c["RECURRENCE-ID"].dt == occurrence_start
-            )
-        ]
+        if existing_override is not None:
+            instance_calendar.subcomponents.remove(existing_override)
         try:
             event.save()
         except caldav.lib.error.PutError:
@@ -529,7 +522,10 @@ class CalDavCalendarTarget:
             resolved = self._resolve_occurrence(instance_calendar, occurrence)
             if resolved is None:
                 return False
-            component = self._find_or_create_exception(instance_calendar, master, *resolved)
+            recurrence_id, start, end, existing_override = resolved
+            component = existing_override or self._create_exception(
+                instance_calendar, master, recurrence_id, start, end
+            )
 
         self._apply_updates_to_component(component, updates)
         try:
@@ -550,68 +546,95 @@ class CalDavCalendarTarget:
 
     def _resolve_occurrence(
         self, instance_calendar: icalendar.Calendar, occurrence: datetime | date
-    ) -> tuple[datetime | date, datetime | date] | None:
-        """Confirm `occurrence` is a real, RRULE-generated instance of this series.
+    ) -> tuple[datetime | date, datetime | date, datetime | date, icalendar.Event | None] | None:
+        """Confirm `occurrence` is a real instance of this series and resolve it.
 
-        Returns its actual (start, end) bounds, or None if `occurrence`
-        doesn't correspond to any instance the series actually generates
-        (wrong time, wrong day, already excluded, ...).
+        Returns `(recurrence_id, start, end, existing_override)`, or `None`
+        if `occurrence` doesn't correspond to any instance the series
+        actually generates (wrong time, wrong day, already excluded, ...).
+        `recurrence_id` is the instance's *original* scheduled slot (always
+        `event_starts_match`-equal to `occurrence`); `start`/`end` are its
+        *current* (possibly already-moved) bounds; `existing_override` is the
+        already-present exception VEVENT for this instance, if any.
 
-        Uses `recurring_ical_events` (already a transitive dependency of
-        `caldav`, via `icalendar`) to expand the series locally -- no extra
-        network round trip, since `instance_calendar` was already fetched.
-        This also returns the occurrence's start/end in the same value type
-        and timezone representation as the master's own DTSTART, since the
-        library operates on the icalendar object's native types without
-        renormalizing them.
+        Two-step resolution, both matching via `event_starts_match` (never a
+        plain `==`, which neither normalizes timezones nor accepts a naive
+        `occurrence` against a TZID master):
+
+        1. Search `instance_calendar`'s own subcomponents for an exception
+           VEVENT (has RECURRENCE-ID) whose RECURRENCE-ID matches -- found
+           independently of that exception's current (possibly moved)
+           DTSTART, since a previously-moved occurrence must still be found
+           by its original slot (R3-05).
+        2. Otherwise, expand the series with `recurring_ical_events` (already
+           a transitive dependency of `caldav`, via `icalendar`) and match
+           each candidate's own RECURRENCE-ID -- never its current DTSTART.
+           `recurring_ical_events` sets RECURRENCE-ID on *every* occurrence it
+           returns, regular or overridden (`recurring_ical_events/adapters/
+           component.py:118-123`, verified against 3.8.2: if the copied
+           component has no RECURRENCE-ID yet, it's set from that same
+           component's own (just-resolved) DTSTART) -- so matching via
+           RECURRENCE-ID is always available, and is essential here: within
+           the +-1 day window, an unrelated override that happens to have
+           been moved to land near `occurrence` would otherwise be picked
+           instead of the genuine, undisturbed instance at that original
+           slot. The library also preserves the master's own value type
+           (DATE vs DATE-TIME) and timezone/floating-ness exactly on every
+           occurrence it produces (empirically verified against 3.8.2 for a
+           TZID, a floating, a UTC, and an all-day master) -- so the returned
+           `recurrence_id`/`start`/`end` never need separate renormalization
+           to match the master's own representation.
         """
-        window = timedelta(days=1)
-        candidates = recurring_ical_events.of(instance_calendar).between(
-            occurrence - window, occurrence + window
-        )
-        for component in candidates:
-            start = component["dtstart"].dt
-            if start == occurrence:
+        for component in instance_calendar.subcomponents:
+            if not isinstance(component, icalendar.Event) or "RECURRENCE-ID" not in component:
+                continue
+            recurrence_id = component["RECURRENCE-ID"].dt
+            if event_starts_match(recurrence_id, occurrence):
+                start = component["dtstart"].dt
                 end = component["dtend"].dt if "dtend" in component else start
-                return start, end
+                return recurrence_id, start, end, component
+
+        window = timedelta(days=1)
+        for component in recurring_ical_events.of(instance_calendar).between(
+            occurrence - window, occurrence + window
+        ):
+            recurrence_id = component["RECURRENCE-ID"].dt
+            if event_starts_match(recurrence_id, occurrence):
+                start = component["dtstart"].dt
+                end = component["dtend"].dt if "dtend" in component else start
+                return recurrence_id, start, end, None
         return None
 
-    def _find_or_create_exception(
+    def _create_exception(
         self,
         instance_calendar: icalendar.Calendar,
         master: icalendar.Event,
-        occurrence_start: datetime | date,
-        occurrence_end: datetime | date,
+        recurrence_id: datetime | date,
+        start: datetime | date,
+        end: datetime | date,
     ) -> icalendar.Event:
-        """Find this occurrence's existing exception VEVENT, or create a new one.
+        """Create a new exception VEVENT for one occurrence of the series.
 
-        A new exception starts as a copy of the master's own top-level
-        fields (summary/description/location) -- but never its RRULE (an
-        exception instance must not itself recur) or VALARMs
-        (`Component.copy()` already drops subcomponents; inheriting the
-        master's reminders implicitly would be surprising for an instance
-        that didn't ask for any). Its DTSTART/DTEND are set to this specific
-        occurrence's own resolved bounds, not the master's -- otherwise an
-        update that doesn't also change start/end would leave the exception
-        dated at the master's first occurrence instead of the one being
-        edited.
+        Starts as a copy of the master's own top-level fields (summary/
+        description/location) -- but never its RRULE (an exception instance
+        must not itself recur) or VALARMs (`Component.copy()` already drops
+        subcomponents; inheriting the master's reminders implicitly would be
+        surprising for an instance that didn't ask for any). Its DTSTART/
+        DTEND are set to this specific occurrence's own resolved bounds, not
+        the master's -- otherwise an update that doesn't also change start/
+        end would leave the exception dated at the master's first occurrence
+        instead of the one being edited. Whether an exception already exists
+        for this occurrence is `_resolve_occurrence`'s job, not this one's --
+        callers must check its `existing_override` first.
         """
-        for component in instance_calendar.subcomponents:
-            if (
-                isinstance(component, icalendar.Event)
-                and "RECURRENCE-ID" in component
-                and component["RECURRENCE-ID"].dt == occurrence_start
-            ):
-                return component
-
         exception = master.copy()
         exception.pop("RRULE", None)
         exception.pop("RECURRENCE-ID", None)
         exception.pop("dtstart", None)
         exception.pop("dtend", None)
-        exception.add("RECURRENCE-ID", occurrence_start)
-        exception.add("dtstart", occurrence_start)
-        exception.add("dtend", occurrence_end)
+        exception.add("RECURRENCE-ID", recurrence_id)
+        exception.add("dtstart", start)
+        exception.add("dtend", end)
         instance_calendar.add_component(exception)
         return exception
 
