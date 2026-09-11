@@ -19,6 +19,15 @@ CONF_DEFAULT_REMINDER_MINUTES = "default_reminder_minutes"
 CONF_DEFAULT_REMINDER_METHOD = "default_reminder_method"
 CONF_DEFAULT_TARGET = "default_target"
 
+# Independent of CONF_DEFAULT_REMINDER_METHOD: that value alone used to also
+# decide whether the periodic poller backfills a reminder onto events it
+# didn't create itself (the native "+" button, the Google/iOS app, an
+# accepted invitation) -- opt-in, off unless a subentry explicitly sets this.
+# `.get(CONF_BACKFILL_EXTERNAL_EVENTS, DEFAULT_BACKFILL_EXTERNAL_EVENTS)`
+# throughout, since a subentry created before this option existed has no such
+# key stored yet and must not be implicitly treated as opted in.
+CONF_BACKFILL_EXTERNAL_EVENTS = "backfill_external_events"
+
 # Independent of the native (VALARM/Google) reminder above: an HA-native
 # notification calendar_bridge schedules itself for every event it detects on
 # this calendar, whether created via calendar_bridge.create_event, the native
@@ -40,6 +49,7 @@ DEFAULT_REMINDER_MINUTES = 15
 DEFAULT_REMINDER_METHOD = REMINDER_METHOD_POPUP
 DEFAULT_NOTIFY_ENABLED = False
 DEFAULT_NOTIFY_MINUTES_BEFORE = 30
+DEFAULT_BACKFILL_EXTERNAL_EVENTS = False
 
 MIN_REMINDER_MINUTES = 0
 MAX_REMINDER_MINUTES = 40320  # 28 days, Google Calendar's own upper bound
