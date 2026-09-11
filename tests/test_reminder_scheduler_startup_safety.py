@@ -110,6 +110,34 @@ async def test_overdue_but_fresh_reminder_stays_in_the_store_until_sent(
 
 
 @pytest.mark.asyncio
+async def test_overdue_reminder_is_removed_from_the_store_after_sending(
+    hass: HomeAssistant, enable_custom_integrations: None, hass_storage: dict
+) -> None:
+    hass.set_state(CoreState.not_running)
+    stored = _overdue_reminder_data(timedelta(minutes=5))
+    hass_storage[_STORAGE_KEY] = stored
+    send_mock = AsyncMock()
+    hass.services.async_register("notify", "send_message", send_mock)
+
+    assert await async_setup_component(hass, DOMAIN, {})
+    await hass.async_block_till_done()
+
+    # Before HA finishes starting: neither sent nor removed yet. Without this
+    # checkpoint, a regression that sends (and discards) immediately -- like
+    # the pre-fix code -- would happen to leave the same end state and this
+    # test would pass for the wrong reason.
+    send_mock.assert_not_called()
+    assert hass_storage[_STORAGE_KEY]["data"]["reminders"] == stored["data"]["reminders"]
+
+    hass.set_state(CoreState.running)
+    hass.bus.async_fire(EVENT_HOMEASSISTANT_STARTED)
+    await hass.async_block_till_done()
+
+    send_mock.assert_called_once()
+    assert hass_storage[_STORAGE_KEY]["data"]["reminders"] == []
+
+
+@pytest.mark.asyncio
 async def test_timer_fire_with_failing_send_still_clears_the_store_entry(
     hass: HomeAssistant, enable_custom_integrations: None, hass_storage: dict, freezer
 ) -> None:
