@@ -24,7 +24,7 @@ import contextlib
 import logging
 import uuid
 from datetime import date, datetime, timedelta
-from typing import Any
+from typing import Any, NamedTuple
 
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.event import async_track_point_in_time
@@ -42,6 +42,26 @@ from .target import (
 )
 
 _LOGGER = logging.getLogger(__name__)
+
+
+class _Claim(NamedTuple):
+    """A delivery's own immutable snapshot of what it claimed to send (G6/A1D-03).
+
+    `_deliver` reads only from this, never from the shared, mutable
+    `reminder` dict it also holds a reference to -- a reconciliation landing
+    between `_spawn_delivery`'s claim and `_deliver`'s own synchronous
+    pre-check would otherwise be read straight through, sending against
+    target/message that were never actually current at claim time. Not
+    reachable in production today (`hass.async_create_background_task` runs
+    eager -- `core.py` -- so no scheduling gap exists there), but this is a
+    real race the moment that ever changes, and worth guarding against
+    regardless.
+    """
+
+    revision: int
+    target: str
+    message: str
+
 
 _STORAGE_VERSION = 2
 _STORAGE_KEY = f"{DOMAIN}_reminders"
@@ -162,16 +182,20 @@ class ReminderScheduler:
         # the entry id lets diagnostics report a count scoped to one account
         # instead of this whole, domain-wide scheduler.
         self._unsub: dict[str, tuple[Any, str]] = {}
-        # Reminder id -> its `revision` at claim time, for every reminder
-        # currently claimed for delivery (awaiting or inside `_deliver`'s
-        # notify call). Checked and set synchronously (no `await` in
-        # between) by `_apply`/`_claim_for_delivery`, always called while
-        # `self._lock` is held, so a timer firing at the same moment a poll
-        # reconciles the same entry can never both claim it for delivery.
-        # The stored revision lets a stale claim (the entry moved on while
-        # this one was in flight -- F1) recognize itself as stale instead of
-        # writing back against a since-superseded fire_at/event_start.
-        self._sending: dict[str, int] = {}
+        # Reminder id -> its `_Claim` snapshot (revision/target/message) at
+        # claim time, for every reminder currently claimed for delivery
+        # (awaiting or inside `_deliver`'s notify call). Checked and set
+        # synchronously (no `await` in between) by `_apply`/
+        # `_claim_for_delivery`, always called while `self._lock` is held,
+        # so a timer firing at the same moment a poll reconciles the same
+        # entry can never both claim it for delivery. The stored revision
+        # lets a stale claim (the entry moved on while this one was in
+        # flight -- F1) recognize itself as stale instead of writing back
+        # against a since-superseded fire_at/event_start; the stored target/
+        # message (G6/A1D-03) let `_deliver` send using exactly what was
+        # current at claim time, never whatever a since-landed change left
+        # behind in the shared, mutable reminder dict.
+        self._sending: dict[str, _Claim] = {}
         # (cancel callback, owning config entry id) per reminder id with an
         # already-registered `async_at_started` callback -- same shape as
         # `_unsub`, since `async_at_started` does return a `CALLBACK_TYPE`
@@ -778,7 +802,9 @@ class ReminderScheduler:
             return None
         if reminder_id not in {r["id"] for r in self._data["reminders"]}:
             return None
-        self._sending[reminder_id] = reminder.get("revision", 0)
+        self._sending[reminder_id] = _Claim(
+            reminder.get("revision", 0), reminder["target"], reminder["message"]
+        )
         return reminder
 
     def _claim_if_current(
@@ -820,47 +846,62 @@ class ReminderScheduler:
         return self._claim_for_delivery(reminder)
 
     def _spawn_delivery(self, reminder: dict[str, Any]) -> None:
-        claimed_revision = self._sending[reminder["id"]]
+        claim = self._sending[reminder["id"]]
         self._hass.async_create_background_task(
-            self._deliver(reminder, claimed_revision), f"calendar_bridge_reminder_{reminder['id']}"
+            self._deliver(reminder, claim), f"calendar_bridge_reminder_{reminder['id']}"
         )
 
-    async def _deliver(self, reminder: dict[str, Any], claimed_revision: int) -> None:
+    async def _deliver(self, reminder: dict[str, Any], claim: _Claim) -> None:
         """Send one entry's notification, without holding the lock for it.
 
         Runs as a standalone background task: `_apply`/`_claim_if_current`
-        claim a due entry (marking it `_sending`, alongside its revision at
-        that moment) while `self._lock` is held, then the caller releases
-        the lock before handing it here. A real `notify` service call under
-        `blocking=True` has no timeout, so it must never itself hold the
-        lock for its full, potentially unbounded duration -- every other
-        calendar's reconciliation and every explicit `create_event(notify)`
-        call would otherwise stall behind whichever single notify
-        integration happens to be slow or hanging (N5/N3). `self._lock` is
-        only ever touched via `async with` here, so a cancelled delivery
-        task can never leave the lock held by nobody or corrupt another
-        task's acquire/release balance.
+        claim a due entry (marking it `_sending`, alongside a `_Claim`
+        snapshot of its revision/target/message at that moment) while
+        `self._lock` is held, then the caller releases the lock before
+        handing it here. A real `notify` service call under `blocking=True`
+        has no timeout, so it must never itself hold the lock for its full,
+        potentially unbounded duration -- every other calendar's
+        reconciliation and every explicit `create_event(notify)` call would
+        otherwise stall behind whichever single notify integration happens
+        to be slow or hanging (N5/N3). `self._lock` is only ever touched via
+        `async with` here, so a cancelled delivery task can never leave the
+        lock held by nobody or corrupt another task's acquire/release
+        balance.
 
-        `claimed_revision` (not `reminder["revision"]`, which could already
-        have been mutated in place by a reconciliation that ran while this
-        was in flight) is this delivery's own immutable snapshot -- used by
-        `_finish_delivery` to recognize a stale write-back (F1/A1-02) rather
-        than recording an outcome against an entry that has since moved on.
+        Never reads `reminder["target"]`/`reminder["message"]`/
+        `reminder["revision"]` directly -- only `claim`, an immutable
+        snapshot that can't have been mutated in place by a reconciliation
+        that ran since this was claimed (G6/A1D-03). Before ever calling
+        notify, synchronously re-checks the entry's *current* revision
+        against `claim.revision`: not reachable in production today (a real
+        background task starts eager, so no scheduling gap exists between
+        `_spawn_delivery`'s claim and this line), but without it, a task
+        that did start after such a gap would send unconditionally using
+        whatever's now in the shared dict, and the reclaim below would
+        *also* redeliver -- two real sends for one due entry. A revision
+        change *during* the notify call itself is a separate, real race
+        (F1/A1-02) still handled by `_finish_delivery` below regardless.
         """
         reminder_id = reminder["id"]
         redo: dict[str, Any] | None = None
         try:
-            if reminder_id in {r["id"] for r in self._data["reminders"]}:
-                target = reminder["target"]
-                if self._hass.states.get(target) is None:
+            async with self._lock:
+                current = next((r for r in self._data["reminders"] if r["id"] == reminder_id), None)
+                proceed = current is not None and current.get("revision", 0) == claim.revision
+                if current is not None and not proceed:
+                    if self._sending.get(reminder_id) == claim:
+                        del self._sending[reminder_id]
+                    redo = self._reclaim_if_still_due(current, dt_util.utcnow())
+            if proceed:
+                if self._hass.states.get(claim.target) is None:
                     _LOGGER.warning("Notify target is unavailable; not sending a reminder")
-                    redo = await self._finish_delivery(reminder_id, claimed_revision, send_ok=False)
+                    redo = await self._finish_delivery(reminder_id, claim, send_ok=False)
                 else:
                     try:
                         await self._hass.services.async_call(
                             "notify",
                             "send_message",
-                            {"entity_id": target, "message": reminder["message"]},
+                            {"entity_id": claim.target, "message": claim.message},
                             blocking=True,
                         )
                     except Exception:  # noqa: BLE001 -- a failed send must never abort the caller
@@ -868,23 +909,22 @@ class ReminderScheduler:
                         send_ok = False
                     else:
                         send_ok = True
-                    redo = await self._finish_delivery(
-                        reminder_id, claimed_revision, send_ok=send_ok
-                    )
+                    redo = await self._finish_delivery(reminder_id, claim, send_ok=send_ok)
         finally:
             # Usually a no-op: `_finish_delivery`'s stale-revision path (G1/
             # R1) already released this exact claim itself before reclaiming
-            # -- clearing here again only matters if `_finish_delivery`
-            # returned early (entry discarded) without going through that
-            # path. Guarded by `claimed_revision` either way, so a `redo`
-            # claim placed under a new revision is never clobbered.
-            if self._sending.get(reminder_id) == claimed_revision:
+            # -- clearing here again only matters if this claim was never
+            # even passed to `_finish_delivery` (the pre-check above already
+            # found it stale, or the entry was discarded outright). Guarded
+            # by `claim` either way, so a `redo` claim placed under a new
+            # revision is never clobbered.
+            if self._sending.get(reminder_id) == claim:
                 del self._sending[reminder_id]
         if redo is not None:
             self._spawn_delivery(redo)
 
     async def _finish_delivery(
-        self, reminder_id: str, claimed_revision: int, *, send_ok: bool
+        self, reminder_id: str, claim: _Claim, *, send_ok: bool
     ) -> dict[str, Any] | None:
         """Write back one delivery's outcome under the lock.
 
@@ -903,14 +943,14 @@ class ReminderScheduler:
                 # send above was in flight -- nothing to write back.
                 return None
             current = next(r for r in self._data["reminders"] if r["id"] == reminder_id)
-            if current.get("revision", 0) != claimed_revision:
+            if current.get("revision", 0) != claim.revision:
                 # G1/R1: release this stale attempt's own claim *before*
                 # trying to reclaim -- `_claim_for_delivery` refuses an id
                 # already in `_sending`, so the reclaim below would
                 # otherwise always find itself still "owning" this entry and
                 # return None, leaving a due entry stranded until the next
                 # poll instead of redelivering right away.
-                if self._sending.get(reminder_id) == claimed_revision:
+                if self._sending.get(reminder_id) == claim:
                     del self._sending[reminder_id]
                 return self._reclaim_if_still_due(current, dt_util.utcnow())
             if not send_ok:
