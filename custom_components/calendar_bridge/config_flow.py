@@ -360,7 +360,7 @@ class CalendarBridgeConfigFlow(ConfigFlow, domain=DOMAIN):
         self._abort_if_unique_id_configured()
         try:
             calendars = await async_list_writable_calendars(self.hass, google_entry.entry_id)
-        except (GoogleAccountNotFoundError, ApiException):
+        except GoogleAccountNotFoundError, ApiException:
             return self.async_abort(reason="cannot_connect")
 
         self._google_entry_id = google_entry.entry_id
@@ -445,7 +445,7 @@ class CalendarSubentryFlow(ConfigSubentryFlow):
                     self._google_calendars = await async_list_writable_calendars(
                         self.hass, entry.data[CONF_GOOGLE_ENTRY_ID]
                     )
-                except (GoogleAccountNotFoundError, ApiException):
+                except GoogleAccountNotFoundError, ApiException:
                     return self.async_abort(reason="cannot_connect")
             choices = {
                 cal_id: name
