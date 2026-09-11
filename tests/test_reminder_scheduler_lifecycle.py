@@ -1,5 +1,5 @@
-"""Decision F/G: immediate (not next-poll) reminder-store cleanup on switch-off,
-subentry removal, and config-entry removal.
+"""Immediate (not next-poll) reminder-store cleanup on switch-off, subentry
+removal, and config-entry removal.
 
 Uses the real `hass.config_entries.async_update_subentry`/
 `async_remove_subentry`/`async_remove` APIs -- not a direct call to

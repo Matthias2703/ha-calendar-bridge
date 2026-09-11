@@ -1,16 +1,17 @@
-"""Decision 8a: a `sent` notification marker survives a single<->series key
-change for the same underlying event -- e.g. the CalDAV migration-suppression
-removal (decision C) makes a single-event's first occurrence turning into a
-recognized series a live, everyday scenario, and it must never cause a
-second message for an instance already notified about under its old key.
+"""A `sent` notification marker survives a single<->series key change for the
+same underlying event -- e.g. a single event's first occurrence turning into
+a recognized series is a live, everyday scenario now that a migrating series
+is no longer treated as a reason to suppress its notification, and it must
+never cause a second message for an instance already notified about under
+its old key.
 
-Google and CalDAV instance-identity keys share the exact same format
-(decision 1's correction: a single event's key is the bare uid on both
-backends, a series instance is `series_instance_key(uid, recurrence_id)` on
-both) -- the CalDAV test below exercises the real backend-driven transition
-end-to-end; the Google test supplies the two polls' `SeenEvent`s directly
-(mirroring `google_target.py`'s own key construction) since mocking a whole
-Google poll cycle adds no further proof of the carryover mechanism itself.
+Google and CalDAV instance-identity keys share the exact same format (a
+single event's key is the bare uid on both backends, a series instance is
+`series_instance_key(uid, recurrence_id)` on both) -- the CalDAV test below
+exercises the real backend-driven transition end-to-end; the Google test
+supplies the two polls' `SeenEvent`s directly (mirroring `google_target.py`'s
+own key construction) since mocking a whole Google poll cycle adds no
+further proof of the carryover mechanism itself.
 """
 
 from __future__ import annotations

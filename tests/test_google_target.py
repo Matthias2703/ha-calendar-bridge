@@ -21,6 +21,7 @@ from custom_components.calendar_bridge.target import (
     EventUpdate,
     ReminderSpec,
     SeenEvent,
+    series_instance_key,
 )
 
 _CALENDAR_REF = "matthias@example.com"
@@ -51,6 +52,7 @@ def _google_event(
     start_dt: datetime | date | None = None,
     recurring_event_id: str | None = None,
     recurrence: list[str] | None = None,
+    original_start_dt: datetime | date | None = None,
 ) -> GoogleEvent:
     if start_dt is not None:
         is_all_day = not isinstance(start_dt, datetime)
@@ -74,6 +76,13 @@ def _google_event(
         reminders = Reminders(useDefault=False, overrides=[])
     else:
         reminders = None
+    original_start = (
+        DateOrDatetime(date=original_start_dt)
+        if isinstance(original_start_dt, date) and not isinstance(original_start_dt, datetime)
+        else DateOrDatetime(dateTime=original_start_dt)
+        if original_start_dt is not None
+        else None
+    )
     return GoogleEvent(
         id=event_id,
         iCalUID=ical_uuid or event_id,
@@ -83,6 +92,7 @@ def _google_event(
         reminders=reminders,
         recurringEventId=recurring_event_id,
         recurrence=recurrence or [],
+        originalStartTime=original_start,
     )
 
 
@@ -1146,6 +1156,41 @@ async def test_poll_series_each_instance_is_its_own_seen_event():
     master_entries = [s for s in seen if s.uid == "M"]
     assert len(master_entries) == 1
     assert master_entries[0].is_marker is True
+
+
+@pytest.mark.asyncio
+async def test_poll_moved_series_instance_keys_by_its_original_start_not_current():
+    # Decision 1/6: a series instance's cross-backend notification identity
+    # must stay stable across a move -- it's keyed by `originalStartTime`,
+    # never by the instance's own (possibly since-moved) `start`. Without
+    # this, `create_event`'s own key (computed from the *original* slot
+    # before any move happened) would drift out of sync with what the next
+    # poll computes for the very same, now-rescheduled, instance.
+    target = _make_target()
+    original_start = datetime(2026, 10, 1, 9, 0, tzinfo=UTC)
+    moved_start = datetime(2026, 10, 3, 15, 0, tzinfo=UTC)
+    instance = _google_event(
+        "evt1",
+        "Standup",
+        ical_uuid="uid-1",
+        recurring_event_id="M",
+        start_dt=moved_start,
+        original_start_dt=original_start,
+        use_default_reminder=True,
+    )
+    master = _google_event("M", "Standup", use_default_reminder=True)
+    service = _FakeService([instance], get_event=master)
+    auth = _auth_default_reminders([])
+
+    with _patched(target, service, auth):
+        seen = await target.async_backfill_new_events(
+            _CALENDAR_REF, set(), 30, "popup", _LOOKAHEAD, False
+        )
+
+    assert seen is not None
+    instance_seen = next(s for s in seen if s.uid == "evt1")
+    assert instance_seen.start == moved_start
+    assert instance_seen.instance_key == series_instance_key("uid-1", original_start)
 
 
 @pytest.mark.asyncio

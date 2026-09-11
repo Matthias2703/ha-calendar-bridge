@@ -257,7 +257,12 @@ async def test_timer_fire_with_failing_send_retries_up_to_the_attempt_cap(
     entry = next(r for r in scheduler._data["reminders"] if r["id"] == reminders[0]["id"])
     with caplog.at_level(logging.WARNING):
         for _ in range(MAX_SEND_ATTEMPTS - 1):
-            await scheduler._apply(entry, dt_util.utcnow())
+            # `_apply`/`_send_now` are only ever called while `self._lock` is
+            # held (by whichever real entry point -- a timer or a
+            # reconciliation -- is driving them); `_send_now` releases it
+            # only around the notify call itself, so this must hold it too.
+            async with scheduler._lock:
+                await scheduler._apply(entry, dt_util.utcnow())
 
     assert entry["attempts"] == MAX_SEND_ATTEMPTS
     assert hass_storage[_STORAGE_KEY]["data"]["reminders"] == []

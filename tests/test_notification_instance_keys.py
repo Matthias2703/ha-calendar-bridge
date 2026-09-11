@@ -1,8 +1,9 @@
-"""Decision 6/B: the `instance_key` a `create_event(notify)` call computes at
-creation time must exactly equal what the very next poll computes for that
-same event -- across a naive `spec.start` (interpreted in HA's own zone), an
-already tz-aware `spec.start`, an all-day `date`, and both a single event and
-a series, for both backends.
+"""The `instance_key` a `create_event(notify)` call computes at creation time
+must exactly equal what the very next poll computes for that same event --
+across a naive `spec.start` (interpreted in HA's own zone), an already
+tz-aware `spec.start`, an all-day `date`, and both a single event and a
+series, for both backends. Otherwise the explicit reminder created at the
+same time could never be matched back up with the event the next poll finds.
 
 Rather than driving each backend's full poll machinery (real RRULE
 expansion, an actual DAV/Google server), these tests build the exact

@@ -33,7 +33,7 @@ from custom_components.calendar_bridge.services import (
     async_handle_delete_event,
     async_handle_update_event,
 )
-from custom_components.calendar_bridge.target import EventSpec, EventUpdate
+from custom_components.calendar_bridge.target import EventSpec, EventUpdate, series_instance_key
 
 _DEVICE_ID = "device-1"
 _CALENDAR_URL = "https://example.test/cal/"
@@ -414,3 +414,30 @@ async def test_create_event_notify_all_day_survives_dst_spring_forward(
 
     fire_at = dt_util.parse_datetime(scheduler._data["reminders"][0]["fire_at"])
     assert fire_at == datetime(2026, 3, 28, 8, 0, tzinfo=UTC)
+
+
+@pytest.mark.asyncio
+async def test_create_event_notify_for_a_series_keys_by_uid_and_start():
+    # Decision 1/6: an explicit notification for a *series* (rrule set) must
+    # key by `series_instance_key(uid, spec.start)`, not the bare uid --
+    # otherwise it could never be told apart from a single event's own
+    # explicit entry, and the next poll's per-instance key (also
+    # `series_instance_key`) would never match it (see
+    # test_paket_a1_key_consistency.py for the create<->poll side of this).
+    hass = MagicMock()
+    with patch(
+        "custom_components.calendar_bridge.reminder_scheduler._ReminderStore"
+    ) as mock_store_cls:
+        mock_store = mock_store_cls.return_value
+        mock_store.async_load = AsyncMock(return_value={"reminders": []})
+        mock_store.async_save = AsyncMock()
+        scheduler = ReminderScheduler(hass)
+    hass.data = {DOMAIN: {"reminder_scheduler": scheduler}}
+    start = datetime(2026, 10, 5, 9, 0, tzinfo=UTC)
+    spec = EventSpec(summary="Standup", start=start, rrule="FREQ=DAILY;COUNT=5")
+    notify_data = {ATTR_NOTIFY_TARGET: "notify.phone", ATTR_MINUTES_BEFORE: 30}
+
+    with patch("custom_components.calendar_bridge.reminder_scheduler.async_track_point_in_time"):
+        await _async_schedule_notification(hass, "entry-1", "sub-1", "uid-1", notify_data, spec)
+
+    assert scheduler._data["reminders"][0]["instance_key"] == series_instance_key("uid-1", start)
