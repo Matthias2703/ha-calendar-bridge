@@ -403,10 +403,21 @@ async def _async_handle_entry_updated(
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: CalendarBridgeConfigEntry) -> bool:
-    """Unload a config entry."""
-    scheduler: ReminderScheduler = hass.data[DOMAIN]["reminder_scheduler"]
-    scheduler.async_unsub_entry(entry.entry_id)
-    return await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
+    """Unload a config entry.
+
+    A1-05: unsubscribe the scheduler's in-memory timers only once the
+    platform unload has actually succeeded. `async_unload_platforms`
+    returning `False` leaves the entry in `FAILED_UNLOAD` -- still present,
+    still polled -- but the store entries survive either way; stripping
+    their live timers regardless would strand one whose event is far enough
+    out that the poller's own reconciliation (bounded by its own lookahead)
+    would never replan it.
+    """
+    unloaded = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
+    if unloaded:
+        scheduler: ReminderScheduler = hass.data[DOMAIN]["reminder_scheduler"]
+        scheduler.async_unsub_entry(entry.entry_id)
+    return unloaded
 
 
 async def async_remove_entry(hass: HomeAssistant, entry: CalendarBridgeConfigEntry) -> None:
