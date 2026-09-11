@@ -950,3 +950,214 @@ async def test_poll_explicit_no_reminder_is_patched_without_calendar_lookup():
     assert {e.uid for e in seen} == {"evt1"}
     service.async_patch_event.assert_awaited_once()
     auth.get_json.assert_not_called()
+
+
+# --- B1: series in the poll -- reminder on the master, notification per instance ---
+
+
+@pytest.mark.asyncio
+async def test_poll_series_patches_the_master_once_not_each_instance():
+    # (a) A brand-new daily series' 3 instances must collapse into exactly
+    # one master patch, never one patch per instance (CL-02).
+    target = _make_target()
+    instances = [
+        _google_event(
+            f"evt{i}", "Standup", ical_uuid=f"uid-{i}", recurring_event_id="M", use_default_reminder=True
+        )
+        for i in range(1, 4)
+    ]
+    master = _google_event("M", "Standup", use_default_reminder=True)
+    service = _FakeService(instances, get_event=master)
+    auth = _auth_default_reminders([])
+
+    with _patched(target, service, auth):
+        seen = await target.async_backfill_new_events(
+            _CALENDAR_REF, set(), 30, "popup", _LOOKAHEAD, False
+        )
+
+    assert seen is not None
+    service.async_get_event.assert_called_once_with(_CALENDAR_REF, "M")
+    service.async_patch_event.assert_awaited_once()
+    assert service.async_patch_event.call_args[0][1] == "M"
+    assert any(s.uid == "M" for s in seen)
+
+
+@pytest.mark.asyncio
+async def test_poll_series_instance_with_inherited_override_skips_master_lookup():
+    # (b) Once the master carries an override, a later poll's instance
+    # already reflects it -- no master fetch, no patch. The master must
+    # still get its (suppressed) baseline entry so a future sibling instance
+    # can rely on the "any instance of this master known" check (point 4).
+    target = _make_target()
+    instance = _google_event(
+        "evt4", "Standup", ical_uuid="uid-4", recurring_event_id="M", has_reminder=True
+    )
+    service = _FakeService([instance])
+    auth = _auth_default_reminders([{"method": "popup", "minutes": 10}])
+
+    with _patched(target, service, auth):
+        seen = await target.async_backfill_new_events(
+            _CALENDAR_REF, set(), 30, "popup", _LOOKAHEAD, False
+        )
+
+    assert seen is not None
+    service.async_get_event.assert_not_called()
+    service.async_patch_event.assert_not_awaited()
+    master_entries = [s for s in seen if s.uid == "M"]
+    assert len(master_entries) == 1
+    assert master_entries[0].suppress_notification is True
+
+
+@pytest.mark.asyncio
+async def test_poll_series_master_already_has_override_no_patch():
+    # (c) The instance itself shows no override yet, but the master (fetched
+    # fresh) already has one -- e.g. an earlier poll already patched it and
+    # this representation hasn't caught up. Master IS fetched, but not patched.
+    target = _make_target()
+    instance = _google_event(
+        "evt5", "Standup", ical_uuid="uid-5", recurring_event_id="M", use_default_reminder=True
+    )
+    master = _google_event("M", "Standup", has_reminder=True)
+    service = _FakeService([instance], get_event=master)
+    auth = _auth_default_reminders([])
+
+    with _patched(target, service, auth):
+        seen = await target.async_backfill_new_events(
+            _CALENDAR_REF, set(), 30, "popup", _LOOKAHEAD, False
+        )
+
+    assert seen is not None
+    service.async_get_event.assert_called_once_with(_CALENDAR_REF, "M")
+    service.async_patch_event.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_poll_series_master_lookup_failure_skips_patch_but_keeps_seen():
+    # (d) A failed master resolution must only skip that series' backfill --
+    # the poll's seen-baseline update for every other event must survive.
+    target = _make_target()
+    instance = _google_event(
+        "evt6", "Standup", ical_uuid="uid-6", recurring_event_id="M", use_default_reminder=True
+    )
+    service = _FakeService([instance])
+    service.async_get_event = AsyncMock(side_effect=ApiException("boom"))
+    auth = _auth_default_reminders([])
+
+    with _patched(target, service, auth):
+        seen = await target.async_backfill_new_events(
+            _CALENDAR_REF, set(), 30, "popup", _LOOKAHEAD, False
+        )
+
+    assert seen is not None
+    assert {"evt6"} <= {s.uid for s in seen}
+    service.async_patch_event.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_poll_series_each_instance_is_its_own_seen_event():
+    # (e) Regression protection: identity-key behavior for Google instances
+    # (event.id, per point 2) must survive the master-patch refactor.
+    target = _make_target()
+    starts = [
+        datetime(2026, 10, 1, 9, 0, tzinfo=UTC),
+        datetime(2026, 10, 2, 9, 0, tzinfo=UTC),
+        datetime(2026, 10, 3, 9, 0, tzinfo=UTC),
+    ]
+    instances = [
+        _google_event(
+            f"evt{i}",
+            "Standup",
+            ical_uuid=f"uid-{i}",
+            recurring_event_id="M",
+            start_dt=s,
+            use_default_reminder=True,
+        )
+        for i, s in enumerate(starts, start=1)
+    ]
+    master = _google_event("M", "Standup", use_default_reminder=True)
+    service = _FakeService(instances, get_event=master)
+    auth = _auth_default_reminders([])
+
+    with _patched(target, service, auth):
+        seen = await target.async_backfill_new_events(
+            _CALENDAR_REF, set(), 30, "popup", _LOOKAHEAD, False
+        )
+
+    assert seen is not None
+    instance_seen = {s for s in seen if s.uid != "M"}
+    assert {s.uid for s in instance_seen} == {"evt1", "evt2", "evt3"}
+    assert {s.start for s in instance_seen} == set(starts)
+    master_entries = [s for s in seen if s.uid == "M"]
+    assert len(master_entries) == 1
+    assert master_entries[0].suppress_notification is True
+
+
+@pytest.mark.asyncio
+async def test_poll_single_event_still_patched_directly():
+    # (f) Regression protection: a non-series event's poll-path behavior is
+    # unchanged, and no master-id baseline entry is invented for it.
+    target = _make_target()
+    event = _google_event("evt1", "Arzt", ical_uuid="uid-1", use_default_reminder=True)
+    service = _FakeService([event])
+    auth = _auth_default_reminders([])
+
+    with _patched(target, service, auth):
+        seen = await target.async_backfill_new_events(
+            _CALENDAR_REF, set(), 30, "popup", _LOOKAHEAD, False
+        )
+
+    assert seen is not None
+    assert len(seen) == 1
+    service.async_get_event.assert_not_called()
+    service.async_patch_event.assert_awaited_once()
+    assert service.async_patch_event.call_args[0][1] == "evt1"
+
+
+@pytest.mark.asyncio
+async def test_poll_series_master_id_already_known_skips_lookup_and_patch():
+    # (m) Point 4 (Google addendum): the master-id itself is already in the
+    # baseline -- a daily new instance must never trigger a master fetch.
+    target = _make_target()
+    instance = _google_event(
+        "evt7", "Standup", ical_uuid="uid-7", recurring_event_id="M", use_default_reminder=True
+    )
+    service = _FakeService([instance])
+    auth = _auth_default_reminders([])
+
+    with _patched(target, service, auth):
+        seen = await target.async_backfill_new_events(
+            _CALENDAR_REF, {"M"}, 30, "popup", _LOOKAHEAD, False
+        )
+
+    assert seen is not None
+    service.async_get_event.assert_not_called()
+    service.async_patch_event.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_poll_series_sibling_instance_known_skips_lookup_and_adds_master_baseline():
+    # (n) First poll after upgrade: only an old instance-id of M is known
+    # (not the master-id itself). A new sibling instance must still skip the
+    # master fetch/patch, and the returned set must carry the master's own
+    # baseline entry with suppress_notification=True.
+    target = _make_target()
+    known_instance = _google_event(
+        "evt-old", "Standup", ical_uuid="uid-old", recurring_event_id="M", use_default_reminder=True
+    )
+    new_instance = _google_event(
+        "evt-new", "Standup", ical_uuid="uid-new", recurring_event_id="M", use_default_reminder=True
+    )
+    service = _FakeService([known_instance, new_instance])
+    auth = _auth_default_reminders([])
+
+    with _patched(target, service, auth):
+        seen = await target.async_backfill_new_events(
+            _CALENDAR_REF, {"evt-old"}, 30, "popup", _LOOKAHEAD, False
+        )
+
+    assert seen is not None
+    service.async_get_event.assert_not_called()
+    service.async_patch_event.assert_not_awaited()
+    master_entries = [s for s in seen if s.uid == "M"]
+    assert len(master_entries) == 1
+    assert master_entries[0].suppress_notification is True
