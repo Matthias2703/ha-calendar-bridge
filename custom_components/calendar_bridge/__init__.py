@@ -58,7 +58,7 @@ from .services import (
     async_handle_delete_event,
     async_handle_update_event,
 )
-from .target import SeenEvent, effective_reminder_minutes, render_notify_message
+from .target import SeenEvent, compute_reminder_fire_at, render_notify_message
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -126,12 +126,7 @@ async def _async_schedule_ha_notification(
     message_template: str | None = None,
 ) -> None:
     """Schedule an HA-native notification for a newly-detected calendar event."""
-    all_day = not isinstance(start, datetime)
-    start_dt = (
-        start if isinstance(start, datetime) else datetime.combine(start, datetime.min.time())
-    )
-    effective_minutes = effective_reminder_minutes(all_day, minutes_before, None)
-    fire_at = dt_util.as_utc(start_dt) - timedelta(minutes=effective_minutes)
+    fire_at = compute_reminder_fire_at(start, minutes_before, None)
     try:
         message = render_notify_message(message_template, summary, start)
         await scheduler.async_schedule(target, fire_at, message, entry_id)

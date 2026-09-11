@@ -2,18 +2,21 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from homeassistant.const import ATTR_DEVICE_ID
 from homeassistant.core import Context, ServiceCall
 from homeassistant.exceptions import ServiceValidationError
+from homeassistant.util import dt as dt_util
 
 from custom_components.calendar_bridge.caldav_target import CalDavAuthError, CalDavConnectionError
 from custom_components.calendar_bridge.const import (
     ATTR_ALL_DAY,
     ATTR_END,
+    ATTR_MINUTES_BEFORE,
+    ATTR_NOTIFY_TARGET,
     ATTR_OCCURRENCE,
     ATTR_REMINDER_MINUTES,
     ATTR_RRULE,
@@ -24,11 +27,12 @@ from custom_components.calendar_bridge.const import (
     DOMAIN,
 )
 from custom_components.calendar_bridge.services import (
+    _async_schedule_notification,
     async_handle_create_event,
     async_handle_delete_event,
     async_handle_update_event,
 )
-from custom_components.calendar_bridge.target import EventUpdate
+from custom_components.calendar_bridge.target import EventSpec, EventUpdate
 
 _DEVICE_ID = "device-1"
 _CALENDAR_URL = "https://example.test/cal/"
@@ -371,3 +375,29 @@ async def test_create_event_raises_calendar_unavailable_on_auth_error():
                 }
             ),
         )
+
+
+@pytest.fixture
+def europe_berlin_timezone():
+    original = dt_util.get_default_time_zone()
+    dt_util.set_default_time_zone(dt_util.get_time_zone("Europe/Berlin"))
+    yield
+    dt_util.set_default_time_zone(original)
+
+
+@pytest.mark.asyncio
+async def test_create_event_notify_all_day_survives_dst_spring_forward(europe_berlin_timezone):
+    # (k) Same DST scenario as test_init.py's poller-path test
+    # (test_all_day_notification_survives_dst_spring_forward), exercised
+    # through services.py's own create_event-notify scheduling helper.
+    scheduler = MagicMock()
+    scheduler.async_schedule = AsyncMock()
+    hass = MagicMock()
+    hass.data = {DOMAIN: {"reminder_scheduler": scheduler}}
+    spec = EventSpec(summary="Geburtstag", start=date(2026, 3, 30), all_day=True)
+    notify_data = {ATTR_NOTIFY_TARGET: "notify.phone", ATTR_MINUTES_BEFORE: 1441}
+
+    await _async_schedule_notification(hass, "entry-1", notify_data, spec)
+
+    fire_at = scheduler.async_schedule.call_args[0][1]
+    assert fire_at == datetime(2026, 3, 28, 8, 0, tzinfo=UTC)

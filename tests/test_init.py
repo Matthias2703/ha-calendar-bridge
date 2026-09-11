@@ -17,6 +17,7 @@ from homeassistant.const import (
     EVENT_CALL_SERVICE,
 )
 from homeassistant.core import HomeAssistant
+from homeassistant.util import dt as dt_util
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.calendar_bridge import _async_schedule_ha_notification
@@ -209,3 +210,30 @@ async def test_a_malformed_message_template_does_not_prevent_scheduling():
     scheduler.async_schedule.assert_awaited_once()
     message = scheduler.async_schedule.call_args[0][2]
     assert message == "Reminder: Dentist"
+
+
+@pytest.fixture
+def europe_berlin_timezone():
+    original = dt_util.get_default_time_zone()
+    dt_util.set_default_time_zone(dt_util.get_time_zone("Europe/Berlin"))
+    yield
+    dt_util.set_default_time_zone(original)
+
+
+@pytest.mark.asyncio
+async def test_all_day_notification_survives_dst_spring_forward(europe_berlin_timezone):
+    # (j) Paket C, poller path (this is the only production call site of
+    # _async_schedule_ha_notification): a 2-nominal-day lead time crossing
+    # the 2026-03-29 spring-forward must still fire at 09:00 *local* on
+    # 2026-03-28 (08:00Z) -- computing calendar-first (date minus days,
+    # then anchor, then convert once) instead of midnight-then-subtract
+    # (which gave 07:00Z, one hour off).
+    scheduler = MagicMock()
+    scheduler.async_schedule = AsyncMock()
+
+    await _async_schedule_ha_notification(
+        scheduler, "entry-1", "notify.phone", 1441, "Geburtstag", date(2026, 3, 30)
+    )
+
+    fire_at = scheduler.async_schedule.call_args[0][1]
+    assert fire_at == datetime(2026, 3, 28, 8, 0, tzinfo=UTC)
