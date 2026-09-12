@@ -1,4 +1,4 @@
-"""G3 (Codex delta review, `review/A1-delta.md`, A1D-02): a failed send must
+"""A failed send must
 retry on its own, independent of any later poll -- `_record_failed_attempt`
 today registers no timer at all and relies entirely on "the next periodic
 poll's reconciliation finds `fire_at` still due and tries again", but that

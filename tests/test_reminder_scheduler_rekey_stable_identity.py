@@ -1,5 +1,5 @@
-"""G4 (Codex delta review, `review/A1-delta.md`, A1D-01): rekeying an explicit
-entry onto a shape-changed event (A1-03) must match by stable per-occurrence
+"""Rekeying an explicit
+entry onto a shape-changed event must match by stable per-occurrence
 identity (`series_uid` + the *original* RECURRENCE-ID/originalStartTime a
 series instance key already encodes), not by "some real event with a
 matching *current* start" -- the latter latches onto whichever instance

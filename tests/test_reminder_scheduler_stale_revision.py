@@ -1,4 +1,4 @@
-"""A2-01/A1-02 (Codex diff review, `review/A1-diff.md`): a timer or an
+"""A timer or an
 in-flight delivery that was already under way before a poll moved the same
 entry to a new time must never deliver against the stale state it captured
 -- the freshly moved entry (its own new timer, or a next poll) owns the
@@ -129,7 +129,7 @@ async def test_an_in_flight_delivery_does_not_mark_a_moved_entry_sent(
 
     # The poll moves the same event 6 hours later while the old delivery is
     # still blocked -- `async_reconcile_calendar` itself never blocks on
-    # notify (N5), so this completes promptly regardless.
+    # notify, so this completes promptly regardless.
     new_start = old_start + timedelta(hours=6)
     moved = SeenEvent(
         uid="evt-1", summary="Standup", start=new_start, instance_key="evt-1", series_uid="evt-1"

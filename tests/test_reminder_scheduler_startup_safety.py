@@ -1,13 +1,13 @@
-"""R4-06: a failing reminder send must never abort integration setup.
+"""A failing reminder send must never abort integration setup.
 
 Uses the real hass fixture (via explicit enable_custom_integrations, not
 autouse -- see tests/conftest.py) because the behavior under test spans
 async_setup_component, HA's core-state/event machinery, and Store I/O.
 
-Store data is seeded directly at the current (v2, Paket A1) schema version --
-seeding it at v1 would instead exercise the v1->v2 migration (decision 7,
-covered in test_reminder_scheduler_migration.py), which discards the data
-these tests need present at startup.
+Store data is seeded directly at the current (v2) schema version -- seeding
+it at v1 would instead exercise the v1->v2 migration (covered in
+test_reminder_scheduler_migration.py), which discards the data these tests
+need present at startup.
 """
 
 from __future__ import annotations
@@ -100,7 +100,7 @@ async def test_overdue_reminder_waits_for_ha_to_finish_starting(
 ) -> None:
     hass.set_state(CoreState.not_running)
     hass_storage[_STORAGE_KEY] = _overdue_reminder_data(timedelta(minutes=5))
-    # R4-05's pre-send entity-existence check needs a real state to find --
+    # pre-send entity-existence check needs a real state to find --
     # only the *service* being registered isn't enough anymore.
     hass.states.async_set("notify.phone", "unknown")
     send_mock = AsyncMock()
@@ -115,7 +115,7 @@ async def test_overdue_reminder_waits_for_ha_to_finish_starting(
     hass.bus.async_fire(EVENT_HOMEASSISTANT_STARTED)
     # The actual send happens in a `_deliver` background task, spawned once
     # `_apply` claims the entry -- `wait_background_tasks=True` is needed to
-    # wait for it too, not just the regular tasks HA already tracks (N5).
+    # wait for it too, not just the regular tasks HA already tracks.
     await hass.async_block_till_done(wait_background_tasks=True)
 
     send_mock.assert_called_once()
@@ -163,7 +163,7 @@ async def test_overdue_reminder_is_marked_sent_after_sending(
     hass.bus.async_fire(EVENT_HOMEASSISTANT_STARTED)
     # The actual send happens in a `_deliver` background task, spawned once
     # `_apply` claims the entry -- `wait_background_tasks=True` is needed to
-    # wait for it too, not just the regular tasks HA already tracks (N5).
+    # wait for it too, not just the regular tasks HA already tracks.
     await hass.async_block_till_done(wait_background_tasks=True)
 
     send_mock.assert_called_once()
@@ -180,7 +180,7 @@ async def test_overdue_reminder_is_marked_sent_after_sending(
 async def test_overdue_reminder_already_started_is_discarded_without_sending(
     hass: HomeAssistant, enable_custom_integrations: None, hass_storage: dict
 ) -> None:
-    # Decision 5's fourth `async_load` case: the event has already begun by
+    # fourth `async_load` case: the event has already begun by
     # the time HA restarts -- send nothing, just drop it.
     hass.set_state(CoreState.not_running)
     now = dt_util.utcnow()
@@ -227,7 +227,7 @@ async def test_overdue_reminder_already_started_is_discarded_without_sending(
 async def test_timer_fire_with_failing_send_retries_up_to_the_attempt_cap(
     hass: HomeAssistant, enable_custom_integrations: None, hass_storage: dict, freezer, caplog
 ) -> None:
-    # R4-05/decision H: a failed send doesn't discard the entry outright --
+    # a failed send doesn't discard the entry outright --
     # it's left due (`fire_at` unchanged) so the next poll's reconciliation
     # retries it, up to MAX_SEND_ATTEMPTS. There is no separate retry timer;
     # the "wait" between attempts is however long it takes the next periodic
@@ -256,7 +256,7 @@ async def test_timer_fire_with_failing_send_retries_up_to_the_attempt_cap(
     async_fire_time_changed(hass, fire_at + timedelta(seconds=1))
     # The actual send happens in a `_deliver` background task, spawned once
     # `_apply` claims the entry -- `wait_background_tasks=True` is needed to
-    # wait for it too, not just the regular tasks HA already tracks (N5).
+    # wait for it too, not just the regular tasks HA already tracks.
     await hass.async_block_till_done(wait_background_tasks=True)
 
     reminders = hass_storage[_STORAGE_KEY]["data"]["reminders"]
@@ -270,7 +270,7 @@ async def test_timer_fire_with_failing_send_retries_up_to_the_attempt_cap(
             # whichever real entry point -- a timer or a reconciliation --
             # is driving it) just claims the entry now; the actual notify
             # call and attempt bookkeeping happen in `_deliver`, spawned as
-            # a background task once the lock is released (N5).
+            # a background task once the lock is released.
             async with scheduler._lock:
                 claimed = await scheduler._apply(entry, dt_util.utcnow())
             assert claimed is not None
@@ -280,8 +280,8 @@ async def test_timer_fire_with_failing_send_retries_up_to_the_attempt_cap(
     assert entry["attempts"] == MAX_SEND_ATTEMPTS
     assert hass_storage[_STORAGE_KEY]["data"]["reminders"] == []
 
-    # The final give-up log (like every other reminder-related log line,
-    # R6-03) must never repeat the entry's own target or message content.
+    # The final give-up log (like every other reminder-related log line)
+    # must never repeat the entry's own target or message content.
     give_up_logs = [
         r.getMessage() for r in caplog.records if "Giving up on a reminder" in r.getMessage()
     ]

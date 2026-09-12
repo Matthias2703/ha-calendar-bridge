@@ -57,7 +57,7 @@ def _make_hass_and_entry(target: MagicMock) -> tuple[MagicMock, MagicMock]:
     entry.subentries = {"sub1": subentry}
     entry.runtime_data = target
     # A real ConfigEntry's `.state` is an enum, not a Mock -- every test here
-    # exercises the "normal, loaded" path unless it says otherwise (R5-02).
+    # exercises the "normal, loaded" path unless it says otherwise.
     entry.state = ConfigEntryState.LOADED
     hass = MagicMock()
     return hass, entry
@@ -335,7 +335,7 @@ async def test_update_event_allows_all_day_change_with_both_start_and_end():
     assert result == {"updated": True}
 
 
-# --- R5-05: a communication/backend failure (unreachable server, rejected
+# --- a communication/backend failure (unreachable server, rejected
 # credentials, a Google API error) is not the caller's fault -- HA reserves
 # ServiceValidationError for bad service-call arguments/targets and expects
 # HomeAssistantError for everything else, so create_event's own stack trace
@@ -434,7 +434,7 @@ async def test_create_event_raises_homeassistant_error_on_google_api_exception()
     assert not isinstance(exc_info.value, ServiceValidationError)
 
 
-# --- R5-02: a device resolves fine (it stays in the device registry across an
+# --- a device resolves fine (it stays in the device registry across an
 # unload), but the config entry behind it is not currently loaded -- HA
 # deletes `entry.runtime_data` entirely on a successful unload (verified
 # against the installed homeassistant.config_entries source), so dereferencing
@@ -526,7 +526,7 @@ def europe_berlin_timezone():
 async def test_create_event_notify_all_day_survives_dst_spring_forward(
     europe_berlin_timezone, freezer
 ):
-    # (k) Same DST scenario as test_init.py's poller-path test
+    # Same DST scenario as test_init.py's poller-path test
     # (test_all_day_notification_survives_dst_spring_forward), exercised
     # through services.py's own create_event-notify scheduling helper.
     # Frozen well before the event so the reconciliation `_apply` runs
@@ -554,7 +554,7 @@ async def test_create_event_notify_all_day_survives_dst_spring_forward(
 
 @pytest.mark.asyncio
 async def test_create_event_notify_for_a_series_keys_by_uid_and_start():
-    # Decision 1/6: an explicit notification for a *series* (rrule set) must
+    # an explicit notification for a *series* (rrule set) must
     # key by `series_instance_key(uid, spec.start)`, not the bare uid --
     # otherwise it could never be told apart from a single event's own
     # explicit entry, and the next poll's per-instance key (also
@@ -579,7 +579,7 @@ async def test_create_event_notify_for_a_series_keys_by_uid_and_start():
     assert scheduler._data["reminders"][0]["instance_key"] == series_instance_key("uid-1", start)
 
 
-# --- R5-01: end <= start for a timed event must be rejected up front, not
+# --- end <= start for a timed event must be rejected up front, not
 # silently rewritten deep inside a backend (gcal_sync replaces it with
 # start + 30 minutes; all_day_bounds' own end<=start correction is a
 # separate, intentional all-day shorthand -- explicitly out of scope here).
@@ -698,7 +698,7 @@ async def test_update_event_skips_the_end_before_start_check_for_all_day():
     assert result == {"updated": True}
 
 
-# --- R5-04: an invalid rrule must be rejected up front with a translated
+# --- an invalid rrule must be rejected up front with a translated
 # error, not surface as a raw ValueError from deep inside the CalDAV write
 # path (or an unmodeled failure against the Google API). The rule itself is
 # never repaired -- only rejected.

@@ -1,4 +1,4 @@
-"""A1-04 (Codex diff review, `review/A1-diff.md`): a reminder waiting for HA
+"""A reminder waiting for HA
 to finish starting (`async_at_started`) must stop waiting once its owning
 config entry is unloaded -- `async_at_started` (HA 2025.1.4/2026.3.4) does
 return a cancel callback (`CALLBACK_TYPE`), so there's no reason a torn-down

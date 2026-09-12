@@ -1,7 +1,7 @@
-"""A2/R4-07: seen_events entries for a calendar_ref no subentry of any entry
+"""The seen_events entries for a calendar_ref no subentry of any entry
 uses any more get cleaned up automatically -- on a subentry/entry update
 (the existing `_async_handle_entry_updated` listener) and on the last entry's
-removal (mirroring `ReminderScheduler.async_remove_store`, R6-03).
+removal (mirroring `ReminderScheduler.async_remove_store`).
 """
 
 from __future__ import annotations

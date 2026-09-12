@@ -179,7 +179,7 @@ def _auth_finding_instances(master_id: str, instance_items: list[dict[str, Any]]
         if "/instances" in url:
             return {"items": instance_items}
         # A `recurrence` field marks this as a real series master (see
-        # google_target.py's `_async_resolve_event`, B2-05) -- these tests
+        # google_target.py's `_async_resolve_event`) -- these tests
         # are all about resolving an occurrence of an actual series.
         return {"items": [{"id": master_id, "recurrence": ["RRULE:FREQ=DAILY"]}]}
 
@@ -872,7 +872,7 @@ async def test_instance_lookup_uses_a_wide_search_window_around_the_original_tim
     assert window >= timedelta(days=180)
 
 
-# --- D2: exact-match backfill candidates + useDefault reminders (R2-01/R2-06) ---
+# --- exact-match backfill candidates + useDefault reminders ---
 
 
 @pytest.fixture
@@ -1090,13 +1090,13 @@ async def test_poll_explicit_no_reminder_is_patched_without_calendar_lookup():
     auth.get_json.assert_not_called()
 
 
-# --- B1: series in the poll -- reminder on the master, notification per instance ---
+# --- Series in the poll -- reminder on the master, notification per instance ---
 
 
 @pytest.mark.asyncio
 async def test_poll_series_patches_the_master_once_not_each_instance():
-    # (a) A brand-new daily series' 3 instances must collapse into exactly
-    # one master patch, never one patch per instance (CL-02).
+    # A brand-new daily series' 3 instances must collapse into exactly
+    # one master patch, never one patch per instance.
     target = _make_target()
     instances = [
         _google_event(
@@ -1126,10 +1126,10 @@ async def test_poll_series_patches_the_master_once_not_each_instance():
 
 @pytest.mark.asyncio
 async def test_poll_series_instance_with_inherited_override_skips_master_lookup():
-    # (b) Once the master carries an override, a later poll's instance
+    # Once the master carries an override, a later poll's instance
     # already reflects it -- no master fetch, no patch. The master must
     # still get its (suppressed) baseline entry so a future sibling instance
-    # can rely on the "any instance of this master known" check (point 4).
+    # can rely on the "any instance of this master known" check.
     target = _make_target()
     instance = _google_event(
         "evt4", "Standup", ical_uuid="uid-4", recurring_event_id="M", has_reminder=True
@@ -1152,7 +1152,7 @@ async def test_poll_series_instance_with_inherited_override_skips_master_lookup(
 
 @pytest.mark.asyncio
 async def test_poll_series_master_already_has_override_no_patch():
-    # (c) The instance itself shows no override yet, but the master (fetched
+    # The instance itself shows no override yet, but the master (fetched
     # fresh) already has one -- e.g. an earlier poll already patched it and
     # this representation hasn't caught up. Master IS fetched, but not patched.
     target = _make_target()
@@ -1175,7 +1175,7 @@ async def test_poll_series_master_already_has_override_no_patch():
 
 @pytest.mark.asyncio
 async def test_poll_series_master_lookup_failure_skips_patch_but_keeps_seen():
-    # (d) A failed master resolution must only skip that series' backfill --
+    # A failed master resolution must only skip that series' backfill --
     # the poll's seen-baseline update for every other event must survive.
     target = _make_target()
     instance = _google_event(
@@ -1197,8 +1197,8 @@ async def test_poll_series_master_lookup_failure_skips_patch_but_keeps_seen():
 
 @pytest.mark.asyncio
 async def test_poll_series_each_instance_is_its_own_seen_event():
-    # (e) Regression protection: identity-key behavior for Google instances
-    # (event.id, per point 2) must survive the master-patch refactor.
+    # Regression protection: identity-key behavior for Google instances
+    # (event.id) must survive the master-patch refactor.
     target = _make_target()
     starts = [
         datetime(2026, 10, 1, 9, 0, tzinfo=UTC),
@@ -1236,7 +1236,7 @@ async def test_poll_series_each_instance_is_its_own_seen_event():
 
 @pytest.mark.asyncio
 async def test_poll_moved_series_instance_keys_by_its_original_start_not_current():
-    # Decision 1/6: a series instance's cross-backend notification identity
+    # a series instance's cross-backend notification identity
     # must stay stable across a move -- it's keyed by `originalStartTime`,
     # never by the instance's own (possibly since-moved) `start`. Without
     # this, `create_event`'s own key (computed from the *original* slot
@@ -1271,7 +1271,7 @@ async def test_poll_moved_series_instance_keys_by_its_original_start_not_current
 
 @pytest.mark.asyncio
 async def test_poll_single_event_still_patched_directly():
-    # (f) Regression protection: a non-series event's poll-path behavior is
+    # Regression protection: a non-series event's poll-path behavior is
     # unchanged, and no master-id baseline entry is invented for it.
     target = _make_target()
     event = _google_event("evt1", "Arzt", ical_uuid="uid-1", use_default_reminder=True)
@@ -1292,8 +1292,8 @@ async def test_poll_single_event_still_patched_directly():
 
 @pytest.mark.asyncio
 async def test_poll_series_master_id_already_known_skips_lookup_and_patch():
-    # (m) Point 4 (Google addendum): the master-id itself is already in the
-    # baseline -- a daily new instance must never trigger a master fetch.
+    # The master-id itself is already in the baseline -- a daily new
+    # instance must never trigger a master fetch.
     target = _make_target()
     instance = _google_event(
         "evt7", "Standup", ical_uuid="uid-7", recurring_event_id="M", use_default_reminder=True
@@ -1313,7 +1313,7 @@ async def test_poll_series_master_id_already_known_skips_lookup_and_patch():
 
 @pytest.mark.asyncio
 async def test_poll_series_sibling_instance_known_skips_lookup_and_adds_master_baseline():
-    # (n) First poll after upgrade: only an old instance-id of M is known
+    # First poll after upgrade: only an old instance-id of M is known
     # (not the master-id itself). A new sibling instance must still skip the
     # master fetch/patch, and the returned set must carry the master's own
     # baseline entry with is_marker=True.
@@ -1340,12 +1340,12 @@ async def test_poll_series_sibling_instance_known_skips_lookup_and_adds_master_b
     assert master_entries[0].is_marker is True
 
 
-# --- B2: uid/occurrence resolution (update/delete) ---
+# --- UID/occurrence resolution (update/delete) ---
 
 
 @pytest.mark.asyncio
 async def test_delete_event_uid_lookup_finds_master_among_an_exception():
-    # (a) The response order between a series' exceptions and its master is
+    # The response order between a series' exceptions and its master is
     # unspecified -- items[0] must never be assumed to be the master.
     target = _make_target()
     service = _FakeService()
@@ -1364,7 +1364,7 @@ async def test_delete_event_uid_lookup_finds_master_among_an_exception():
 
 @pytest.mark.asyncio
 async def test_delete_event_uid_lookup_only_exceptions_no_mutation():
-    # (b) No item without a recurringEventId at all -- refuse rather than
+    # No item without a recurringEventId at all -- refuse rather than
     # delete/patch a mere exception in place of the series or single event.
     target = _make_target()
     service = _FakeService()
@@ -1383,7 +1383,7 @@ async def test_delete_event_uid_lookup_only_exceptions_no_mutation():
 
 @pytest.mark.asyncio
 async def test_delete_event_uid_lookup_ambiguous_no_recurring_event_id_no_mutation():
-    # (c) Two candidates without a recurringEventId -- ambiguous, refuse.
+    # Two candidates without a recurringEventId -- ambiguous, refuse.
     target = _make_target()
     service = _FakeService()
     items = [{"id": "master1"}, {"id": "master2"}]
@@ -1398,7 +1398,7 @@ async def test_delete_event_uid_lookup_ambiguous_no_recurring_event_id_no_mutati
 
 @pytest.mark.asyncio
 async def test_delete_event_uid_lookup_master_on_second_page():
-    # (d) The iCalUID lookup must page through nextPageToken fully -- a
+    # The iCalUID lookup must page through nextPageToken fully -- a
     # single-request lookup can miss the master entirely.
     target = _make_target()
     service = _FakeService()
@@ -1415,7 +1415,7 @@ async def test_delete_event_uid_lookup_master_on_second_page():
 
 @pytest.mark.asyncio
 async def test_update_event_with_occurrence_instance_on_second_page():
-    # (e) events.instances must page through nextPageToken fully. Also
+    # events.instances must page through nextPageToken fully. Also
     # verifies that `originalStart` is never sent -- its query format isn't
     # documented, and a wrong value would silently filter out the correct
     # instance server-side without a mock test ever catching it.
@@ -1447,7 +1447,7 @@ async def test_update_event_with_occurrence_instance_on_second_page():
 
 @pytest.mark.asyncio
 async def test_update_event_with_occurrence_matches_via_original_start_not_current_time():
-    # (f) A since-rescheduled instance is still identified by its
+    # A since-rescheduled instance is still identified by its
     # originalStartTime, not its now-different current start.
     target = _make_target()
     occurrence = datetime(2026, 10, 3, 9, 0, tzinfo=UTC)
@@ -1474,7 +1474,7 @@ async def test_update_event_with_occurrence_matches_via_original_start_not_curre
 
 @pytest.mark.asyncio
 async def test_update_event_with_occurrence_all_day_date_matches():
-    # (g) An all-day series' occurrence is identified by date, not datetime.
+    # An all-day series' occurrence is identified by date, not datetime.
     target = _make_target()
     occurrence = date(2026, 10, 3)
     service = _FakeService()
@@ -1499,8 +1499,9 @@ async def test_update_event_with_occurrence_all_day_date_matches():
 
 @pytest.mark.asyncio
 async def test_update_event_with_occurrence_naive_midnight_datetime_matches_all_day_instance():
-    # (r) HA's cv.datetime always turns a service call's bare "2026-10-03"
-    # into a naive midnight *datetime* (see test_target.py's (q)) -- an
+    # HA's cv.datetime always turns a service call's bare "2026-10-03"
+    # into a naive midnight *datetime* (see
+    # test_target.py's test_cv_datetime_parses_a_bare_date_string_as_a_midnight_datetime) -- an
     # all-day series' occurrence lookup must still find the matching
     # date-valued instance, not require the caller to pass a bare `date`.
     target = _make_target()
@@ -1527,7 +1528,7 @@ async def test_update_event_with_occurrence_naive_midnight_datetime_matches_all_
 
 @pytest.mark.asyncio
 async def test_delete_event_with_occurrence_on_a_single_event_does_not_call_instances():
-    # (B2-05) `occurrence` on a genuinely single event (no `recurrence` field
+    # `occurrence` on a genuinely single event (no `recurrence` field
     # on the resolved master/standalone item) must not even try
     # events.instances -- that endpoint is documented for recurring events
     # only, and the id being probed isn't a series master's.
@@ -1547,12 +1548,12 @@ async def test_delete_event_with_occurrence_on_a_single_event_does_not_call_inst
         assert "/instances" not in call.args[0]
 
 
-# --- C: local time instead of UTC ---
+# --- Local time instead of UTC ---
 
 
 @pytest.mark.asyncio
 async def test_create_event_series_sets_local_datetime_and_timezone(europe_berlin_timezone):
-    # (a) A new recurring event's dateTime must be the local wall clock with
+    # A new recurring event's dateTime must be the local wall clock with
     # its own UTC offset, and timeZone must be the IANA name of HA's
     # configured zone -- Google requires timeZone to expand a series.
     target = _make_target()
@@ -1580,7 +1581,7 @@ async def test_create_event_series_sets_local_datetime_and_timezone(europe_berli
 
 @pytest.mark.asyncio
 async def test_create_event_single_also_sets_timezone(europe_berlin_timezone):
-    # (b) timeZone is set even for a non-recurring event -- one uniform code
+    # timeZone is set even for a non-recurring event -- one uniform code
     # path instead of only setting it when a series is involved.
     target = _make_target()
     auth = AsyncMock()
@@ -1600,7 +1601,7 @@ async def test_create_event_single_also_sets_timezone(europe_berlin_timezone):
 
 @pytest.mark.asyncio
 async def test_create_event_tz_aware_input_converted_to_ha_zone(europe_berlin_timezone):
-    # (c) A tz-aware input (UTC) must be re-expressed in HA's own zone, not
+    # A tz-aware input (UTC) must be re-expressed in HA's own zone, not
     # sent through as UTC.
     target = _make_target()
     auth = AsyncMock()
@@ -1624,7 +1625,7 @@ async def test_create_event_tz_aware_input_converted_to_ha_zone(europe_berlin_ti
 
 @pytest.mark.asyncio
 async def test_update_event_uses_existing_timezone_not_ha_zone():
-    # (d) dateTime must be expressed in exactly the zone the body declares
+    # dateTime must be expressed in exactly the zone the body declares
     # as timeZone -- here the event's own existing start.timeZone (America/
     # New_York), never HA's own configured zone (ambient UTC in this test).
     target = _make_target()
@@ -1654,7 +1655,7 @@ async def test_update_event_uses_existing_timezone_not_ha_zone():
 
 @pytest.mark.asyncio
 async def test_update_event_adding_rrule_backfills_missing_timezone():
-    # (e) Adding an RRULE to a still-single event without a timeZone must
+    # Adding an RRULE to a still-single event without a timeZone must
     # also backfill start/end with one -- Google requires timeZone to
     # expand a recurring event.
     target = _make_target()
@@ -1682,7 +1683,7 @@ async def test_update_event_adding_rrule_backfills_missing_timezone():
 
 @pytest.mark.asyncio
 async def test_update_event_switch_all_day_to_timed_sets_ha_zone(europe_berlin_timezone):
-    # (m) Switching all-day -> timed is treated like a new time value: HA's
+    # Switching all-day -> timed is treated like a new time value: HA's
     # own zone, since an all-day event never had a timeZone to preserve.
     target = _make_target()
     service = _FakeService()
@@ -1713,8 +1714,8 @@ async def test_update_event_switch_all_day_to_timed_sets_ha_zone(europe_berlin_t
 
 
 # --- Privacy: calendar_ref (typically the account's own email) must never
-# reach a log message -- same treatment as caldav_target.py/R5-07: the
-# subentry's own display title, resolved via target.resolve_subentry_title,
+# reach a log message -- same treatment as caldav_target.py's poll-
+# reachability logging: the subentry's own display title, resolved via
 # replaces the raw calendar_ref.
 
 

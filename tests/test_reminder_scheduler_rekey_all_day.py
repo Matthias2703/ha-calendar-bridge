@@ -1,14 +1,15 @@
-"""H1 (Codex delta review round 2, `review/A1-delta.md` follow-up): a
-regression introduced by G4 (A1D-01) -- `_rekey_explicit_on_shape_change`'s
-single-event-became-a-series branch added `if not isinstance(stored_start,
-datetime): return None`, which rejects every all-day event outright. But
-`series_instance_key` already accepts a `date` fine (`as_utc` passes a `date`
-through unchanged), and both backends produce exactly that shape for an
-all-day series instance -- Google's `originalStartTime.date`, CalDAV's
-`RECURRENCE-ID;VALUE=DATE` -- both yielding `f"{uid}#{date.isoformat()}"`.
-Before G4 (i.e. under the original A1-03 current-start matching), an all-day
-explicit entry could still be rekeyed onto its series; G4's stricter,
-stable-identity match regressed that case to always discard it instead.
+"""A stable-identity rekey regression for all-day events.
+
+`_rekey_explicit_on_shape_change`'s single-event-became-a-series branch added
+`if not isinstance(stored_start, datetime): return None`, which rejects every
+all-day event outright. But `series_instance_key` already accepts a `date`
+fine (`as_utc` passes a `date` through unchanged), and both backends produce
+exactly that shape for an all-day series instance -- Google's
+`originalStartTime.date`, CalDAV's `RECURRENCE-ID;VALUE=DATE` -- both
+yielding `f"{uid}#{date.isoformat()}"`. Under the previous, looser
+current-start matching, an all-day explicit entry could still be rekeyed
+onto its series; the stricter, stable-identity match regressed that case to
+always discard it instead.
 """
 
 from __future__ import annotations

@@ -1,4 +1,4 @@
-"""D1: backfilling a reminder onto externally-created events is opt-in.
+"""Backfilling a reminder onto externally-created events is opt-in.
 
 Uses the real hass fixture (explicit enable_custom_integrations, not
 autouse) because the behavior spans config-entry/subentry setup, the
@@ -195,8 +195,8 @@ async def test_f1_add_calendar_without_the_option_saves_it_as_false(
         result = await hass.config_entries.subentries.async_configure(
             result["flow_id"],
             # notify_target explicit: its own "" default fails EntitySelector
-            # validation -- a pre-existing quirk unrelated to this option,
-            # out of scope for D1. Worked around here, not fixed.
+            # validation -- a pre-existing quirk unrelated to this option.
+            # Worked around here, not fixed.
             {CONF_CALENDAR_URL: _CAL2, CONF_NOTIFY_TARGET: "notify.dummy"},
         )
 

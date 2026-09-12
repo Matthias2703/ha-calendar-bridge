@@ -1,5 +1,5 @@
-"""Found while implementing H1 (Codex delta review round 2): `_parse_event_start`
-tried `dt_util.parse_datetime` before `dt_util.parse_date` unconditionally --
+"""`_parse_event_start` tried `dt_util.parse_datetime` before
+`dt_util.parse_date` unconditionally --
 but `dt_util.parse_datetime("2026-09-13")` (a bare, date-only ISO string, the
 serialized form `_serialize_event_start` writes for every all-day event's
 stored `event_start`) *succeeds*, returning a naive `datetime(2026, 9, 13, 0,

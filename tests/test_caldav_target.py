@@ -126,7 +126,7 @@ async def test_naive_start_is_normalized_to_ha_zone_not_left_floating():
     # string has no UTC offset (e.g. "2026-10-01 09:00:00"). Serializing
     # that as-is produces a "floating" DTSTART (no Z, no TZID), which
     # iCloud's CalDAV edge rejects outright with a bare 404. Renamed from
-    # "..._to_utc_..." (Paket C): a naive start is now normalized to HA's
+    # "..._to_utc_...": a naive start is now normalized to HA's
     # own configured zone, not unconditionally UTC -- this suite's ambient
     # zone happens to be UTC (no timezone fixture requested), so the
     # tz-aware assertion below still holds either way.
@@ -721,7 +721,7 @@ def _mock_expanded_series_resource(
     `caldav.Calendar.search()`/`expand_rrule()` replace a recurring master
     with several VEVENT subcomponents in one resource, each stripped of
     RRULE/RDATE/EXDATE/EXRULE and carrying its own RECURRENCE-ID (verified
-    against caldav 2.1.0's source, see the B1 plan) -- this builds that same
+    against caldav 2.1.0's source) -- this builds that same
     shape directly instead of exercising the real expansion. `occurrences` is
     a list of (recurrence_id, actual_start) pairs so a moved exception's
     RECURRENCE-ID (its original slot) can differ from its DTSTART (the
@@ -743,7 +743,7 @@ def _mock_expanded_series_resource(
 
 @pytest.mark.asyncio
 async def test_poll_series_produces_a_seen_event_per_instance():
-    # (g) R3-04: date_search's expanded resource carries 3 VEVENTs, but the
+    # date_search's expanded resource carries 3 VEVENTs, but the
     # old code only ever reads the first one via `icalendar_component`.
     target = _make_target()
     calendar_ref = "https://example.test/cal/"
@@ -769,7 +769,7 @@ async def test_poll_series_produces_a_seen_event_per_instance():
 
 @pytest.mark.asyncio
 async def test_poll_series_patches_the_master_reminder_exactly_once():
-    # (h) At most one event_by_uid/save() per series per poll, even with 3
+    # At most one event_by_uid/save() per series per poll, even with 3
     # instances in the search window; RRULE on the real master survives.
     target = _make_target()
     calendar_ref = "https://example.test/cal/"
@@ -796,7 +796,7 @@ async def test_poll_series_patches_the_master_reminder_exactly_once():
 
 @pytest.mark.asyncio
 async def test_poll_series_exception_key_uses_recurrence_id_not_moved_start():
-    # (i) A moved exception's instance key stays anchored to its original
+    # A moved exception's instance key stays anchored to its original
     # RECURRENCE-ID slot, while its reported start reflects the actual move.
     target = _make_target()
     calendar_ref = "https://example.test/cal/"
@@ -820,7 +820,7 @@ async def test_poll_series_exception_key_uses_recurrence_id_not_moved_start():
 
 @pytest.mark.asyncio
 async def test_poll_single_event_key_is_the_uid():
-    # (j) Regression protection: a non-series event keeps a bare-UID key.
+    # Regression protection: a non-series event keeps a bare-UID key.
     target = _make_target()
     calendar_ref = "https://example.test/cal/"
     mock_calendar = MagicMock()
@@ -840,7 +840,7 @@ async def test_poll_single_event_key_is_the_uid():
 
 @pytest.mark.asyncio
 async def test_poll_migrated_series_recognizes_stored_instance_outside_current_window():
-    # (p) The old bare UID plus any persisted per-instance key means the
+    # The old bare UID plus any persisted per-instance key means the
     # migration already completed, even when that known instance is no
     # longer part of the current date_search window.
     target = _make_target()
@@ -873,11 +873,11 @@ async def test_poll_migrated_series_recognizes_stored_instance_outside_current_w
 
 @pytest.mark.asyncio
 async def test_poll_series_changed_to_single_is_not_a_marker():
-    # (q) A bare UID is unknown after a series first used the B1 instance-key
+    # A bare UID is unknown after a series first used the newer instance-key
     # schema, but its persisted UID# key still proves that this resource was
     # already known before the RRULE was removed -- the backfill still skips
     # it (`series_already_known`), but it's a real event, not a marker
-    # (Paket A1, decision C): it's still eligible for a notification.
+    # -- it's still eligible for a notification.
     target = _make_target()
     calendar_ref = "https://example.test/cal/"
     mock_calendar = MagicMock()
@@ -909,7 +909,7 @@ async def test_poll_series_changed_to_single_is_not_a_marker():
 
 @pytest.mark.asyncio
 async def test_poll_exception_only_resource_does_not_backfill_reminder():
-    # (r) An exception without its master is still a series instance, but it
+    # An exception without its master is still a series instance, but it
     # is not a safe target for the series-wide native reminder.
     target = _make_target()
     calendar_ref = "https://example.test/cal/"
@@ -972,7 +972,7 @@ async def test_backfill_reminder_dry_run_does_not_save():
 
 @pytest.mark.asyncio
 async def test_backfill_reminder_never_patches_a_series_instance():
-    # Changed by D2 (R3-01 addendum): `date_search` returns a flattened,
+    # `date_search` returns a flattened,
     # RRULE-less expansion of any recurring series overlapping the window --
     # matching one used to backfill the *master*'s VALARM (safely, without
     # destroying its RRULE, which this test previously asserted). But
@@ -1064,7 +1064,7 @@ def _mock_uid_event_in_calendar(
     """Like `_mock_uid_event`, but wraps the VEVENT in a real VCALENDAR.
 
     Needed for tests that exercise `add_missing_timezones()`/VTIMEZONE
-    behavior (Paket C) -- `_mock_uid_event`'s bare `icalendar.Event` has no
+    behavior -- `_mock_uid_event`'s bare `icalendar.Event` has no
     `icalendar_instance` to add a VTIMEZONE component to.
     """
     cal = icalendar.Calendar()
@@ -1635,7 +1635,7 @@ async def test_create_event_propagates_a_plain_connection_error():
         await target.async_create_event("https://example.test/cal/", spec)
 
 
-# --- D2: exact-match backfill candidates (R3-01) ---
+# --- exact-match backfill candidates ---
 
 
 @pytest.fixture
@@ -1755,12 +1755,12 @@ async def test_backfill_reminder_does_not_match_a_different_instant(europe_berli
     event.save.assert_not_called()
 
 
-# --- B2: occurrence resolution (update/delete) ---
+# --- Occurrence resolution (update/delete) ---
 
 
 @pytest.mark.asyncio
 async def test_update_event_finds_override_moved_two_days_via_original_start():
-    # (h) R3-05: an override moved +2 days must still be found by its
+    # an override moved +2 days must still be found by its
     # original RECURRENCE-ID, not its now-different current DTSTART.
     target = _make_target()
     calendar_ref = "https://example.test/cal/"
@@ -1790,7 +1790,7 @@ async def test_update_event_finds_override_moved_two_days_via_original_start():
 
 @pytest.mark.asyncio
 async def test_delete_event_finds_override_moved_two_days_via_original_start():
-    # (h) Same as above, for the delete path.
+    # Same as above, for the delete path.
     target = _make_target()
     calendar_ref = "https://example.test/cal/"
     mock_client, mock_calendar = _mock_client_with_calendar(calendar_ref)
@@ -1817,7 +1817,7 @@ async def test_delete_event_finds_override_moved_two_days_via_original_start():
 
 @pytest.mark.asyncio
 async def test_update_event_finds_override_moved_same_day_via_original_start():
-    # (i) A same-day move is still within the old +-1 day window, but the
+    # A same-day move is still within the old +-1 day window, but the
     # old comparison against the current (moved) DTSTART still fails.
     target = _make_target()
     calendar_ref = "https://example.test/cal/"
@@ -1846,7 +1846,7 @@ async def test_update_event_finds_override_moved_same_day_via_original_start():
 
 @pytest.mark.asyncio
 async def test_second_update_after_a_move_reuses_the_same_override():
-    # (j) A second edit of an already-moved occurrence must find and change
+    # A second edit of an already-moved occurrence must find and change
     # the existing override, never create a second one with the same
     # RECURRENCE-ID.
     target = _make_target()
@@ -1882,7 +1882,7 @@ async def test_second_update_after_a_move_reuses_the_same_override():
 
 @pytest.mark.asyncio
 async def test_delete_occurrence_with_existing_override_tzid_master():
-    # (k) Deleting an occurrence with an existing override removes that
+    # Deleting an occurrence with an existing override removes that
     # override and sets an EXDATE matching the TZID master's own form.
     target = _make_target()
     calendar_ref = "https://example.test/cal/"
@@ -1917,7 +1917,7 @@ async def test_delete_occurrence_with_existing_override_tzid_master():
 
 @pytest.mark.asyncio
 async def test_delete_occurrence_with_existing_override_all_day_master():
-    # (k) Same, for an all-day (DATE-valued) master.
+    # Same, for an all-day (DATE-valued) master.
     target = _make_target()
     calendar_ref = "https://example.test/cal/"
     mock_client, mock_calendar = _mock_client_with_calendar(calendar_ref)
@@ -1946,7 +1946,7 @@ async def test_delete_occurrence_with_existing_override_all_day_master():
 
 @pytest.mark.asyncio
 async def test_new_override_at_tzid_master_keeps_the_same_tzid():
-    # (l) A first-time (non-moved) override at a TZID master keeps that TZID.
+    # A first-time (non-moved) override at a TZID master keeps that TZID.
     target = _make_target()
     calendar_ref = "https://example.test/cal/"
     mock_client, mock_calendar = _mock_client_with_calendar(calendar_ref)
@@ -1972,7 +1972,7 @@ async def test_new_override_at_tzid_master_keeps_the_same_tzid():
 
 @pytest.mark.asyncio
 async def test_update_event_occurrence_excluded_by_exdate_no_mutation():
-    # (m) An EXDATE-excluded slot doesn't exist -- no override, no mutation.
+    # An EXDATE-excluded slot doesn't exist -- no override, no mutation.
     target = _make_target()
     calendar_ref = "https://example.test/cal/"
     mock_client, mock_calendar = _mock_client_with_calendar(calendar_ref)
@@ -1996,7 +1996,7 @@ async def test_update_event_occurrence_excluded_by_exdate_no_mutation():
 
 @pytest.mark.asyncio
 async def test_update_event_naive_occurrence_matches_tzid_master(europe_berlin_timezone):
-    # (n) A naive occurrence is interpreted in HA's own configured timezone
+    # A naive occurrence is interpreted in HA's own configured timezone
     # and must still match a TZID master via event_starts_match.
     target = _make_target()
     calendar_ref = "https://example.test/cal/"
@@ -2022,7 +2022,7 @@ async def test_update_event_naive_occurrence_matches_tzid_master(europe_berlin_t
 
 @pytest.mark.asyncio
 async def test_update_regular_monday_when_tuesday_override_collides_at_monday_time():
-    # (o) A Tuesday instance was moved to Monday 09:00 -- updating the
+    # A Tuesday instance was moved to Monday 09:00 -- updating the
     # regular Monday occurrence must create its own new override (keyed by
     # the *regular* Monday's RECURRENCE-ID), never reuse or touch the
     # Tuesday override just because its current DTSTART also lands on Monday.
@@ -2058,7 +2058,7 @@ async def test_update_regular_monday_when_tuesday_override_collides_at_monday_ti
 
 @pytest.mark.asyncio
 async def test_new_override_and_exdate_match_floating_master_value_type():
-    # (p) A floating (no-tzinfo) master's new override keeps that same
+    # A floating (no-tzinfo) master's new override keeps that same
     # floating/naive value type.
     target = _make_target()
     calendar_ref = "https://example.test/cal/"
@@ -2082,7 +2082,7 @@ async def test_new_override_and_exdate_match_floating_master_value_type():
 
 @pytest.mark.asyncio
 async def test_new_override_and_exdate_match_utc_master_value_type():
-    # (p) A UTC master's new EXDATE keeps the UTC form.
+    # A UTC master's new EXDATE keeps the UTC form.
     target = _make_target()
     calendar_ref = "https://example.test/cal/"
     mock_client, mock_calendar = _mock_client_with_calendar(calendar_ref)
@@ -2108,7 +2108,7 @@ async def test_new_override_and_exdate_match_utc_master_value_type():
 
 @pytest.mark.asyncio
 async def test_update_event_naive_midnight_datetime_matches_all_day_instance():
-    # (s) HA's cv.datetime always turns a service call's bare "2026-10-08"
+    # HA's cv.datetime always turns a service call's bare "2026-10-08"
     # into a naive midnight *datetime* -- an all-day master's occurrence
     # lookup must still resolve it and create a DATE-valued override, not a
     # DATE-TIME one.
@@ -2138,7 +2138,7 @@ async def test_update_event_naive_midnight_datetime_matches_all_day_instance():
 
 @pytest.mark.asyncio
 async def test_delete_event_naive_midnight_datetime_matches_all_day_instance():
-    # (s) Same, for the delete path -- EXDATE must be DATE-valued too.
+    # Same, for the delete path -- EXDATE must be DATE-valued too.
     target = _make_target()
     calendar_ref = "https://example.test/cal/"
     mock_client, mock_calendar = _mock_client_with_calendar(calendar_ref)
@@ -2160,12 +2160,12 @@ async def test_delete_event_naive_midnight_datetime_matches_all_day_instance():
     assert all(not isinstance(v, datetime) for v in exdate_values)
 
 
-# --- C: local time instead of UTC ---
+# --- Local time instead of UTC ---
 
 
 @pytest.mark.asyncio
 async def test_create_event_series_uses_tzid_and_vtimezone(europe_berlin_timezone):
-    # (f) A new recurring CalDAV event's DTSTART/DTEND carry the HA zone's
+    # A new recurring CalDAV event's DTSTART/DTEND carry the HA zone's
     # TZID, and the VCALENDAR is self-contained (a matching VTIMEZONE).
     target = _make_target()
     spec = EventSpec(
@@ -2187,7 +2187,7 @@ async def test_create_event_series_uses_tzid_and_vtimezone(europe_berlin_timezon
 
 @pytest.mark.asyncio
 async def test_create_event_series_expands_correctly_across_dst(europe_berlin_timezone):
-    # (g) recurring_ical_events must resolve the post-DST instance at the
+    # recurring_ical_events must resolve the post-DST instance at the
     # same *local* wall time, not drift by the changed UTC offset -- proves
     # add_missing_timezones() produced a usable VTIMEZONE, not just a
     # syntactically-present one.
@@ -2213,7 +2213,7 @@ async def test_create_event_series_expands_correctly_across_dst(europe_berlin_ti
 
 @pytest.mark.asyncio
 async def test_update_event_time_change_preserves_existing_tzid():
-    # (h) A time-update on an existing TZID series keeps that same TZID --
+    # A time-update on an existing TZID series keeps that same TZID --
     # never re-normalizes to UTC or HA's own zone. Also: add_missing_
     # timezones() must not add a second VTIMEZONE for a zone that's already
     # there.
@@ -2248,7 +2248,7 @@ async def test_update_event_time_change_preserves_existing_tzid():
 
 @pytest.mark.asyncio
 async def test_update_event_time_change_preserves_floating():
-    # (i) A floating (no TZID, no Z) existing event stays floating after a
+    # A floating (no TZID, no Z) existing event stays floating after a
     # time-update.
     target = _make_target()
     calendar_ref = "https://example.test/cal/"
@@ -2274,7 +2274,7 @@ async def test_update_event_time_change_preserves_floating():
 
 @pytest.mark.asyncio
 async def test_update_event_time_change_preserves_utc():
-    # (i) A UTC ("Z") existing event stays UTC after a time-update.
+    # A UTC ("Z") existing event stays UTC after a time-update.
     target = _make_target()
     calendar_ref = "https://example.test/cal/"
     mock_client, mock_calendar = _mock_client_with_calendar(calendar_ref)
@@ -2299,7 +2299,7 @@ async def test_update_event_time_change_preserves_utc():
 
 @pytest.mark.asyncio
 async def test_update_event_non_iana_tzid_gets_a_matching_vtimezone():
-    # (l) icalendar maps some non-IANA TZIDs (e.g. Windows zone names) to an
+    # icalendar maps some non-IANA TZIDs (e.g. Windows zone names) to an
     # equivalent IANA zone on parse -- confirmed against 6.3.1: a
     # "W. Europe Standard Time" TZID resolves to zoneinfo.ZoneInfo(
     # "Europe/Berlin"), and a freshly re-added dtstart is then tagged with
@@ -2375,7 +2375,7 @@ async def test_update_event_non_iana_tzid_gets_a_matching_vtimezone():
 async def test_update_event_switch_all_day_to_timed_uses_ha_zone_and_vtimezone(
     europe_berlin_timezone,
 ):
-    # (m) Switching all_day -> timed is treated like a new time value: HA's
+    # Switching all_day -> timed is treated like a new time value: HA's
     # own zone with a fresh TZID + VTIMEZONE, since an all-day event never
     # had a timed representation to preserve.
     target = _make_target()
@@ -2406,18 +2406,18 @@ async def test_update_event_switch_all_day_to_timed_uses_ha_zone_and_vtimezone(
 
 @pytest.mark.asyncio
 async def test_delete_event_non_iana_tzid_gets_a_matching_vtimezone():
-    # (n) Same underlying icalendar remapping as (l), for the delete path:
-    # a "W. Europe Standard Time" master's *regular* instance is deleted
-    # via EXDATE. The EXDATE value is the matched instance's own
+    # Same underlying icalendar remapping as in
+    # test_update_event_non_iana_tzid_gets_a_matching_vtimezone, for the
+    # delete path: a "W. Europe Standard Time" master's *regular* instance is
+    # deleted via EXDATE. The EXDATE value is the matched instance's own
     # RECURRENCE-ID -- synthesized by recurring_ical_events from the
     # master's own DTSTART, which icalendar has already resolved to
     # zoneinfo.ZoneInfo("Europe/Berlin") on parse (not the original
-    # "W. Europe Standard Time" string, see (l)) -- so the new EXDATE ends
+    # "W. Europe Standard Time" string) -- so the new EXDATE ends
     # up tagged with a *different* TZID than the master's own DTSTART
-    # param, and both must end up with a matching VTIMEZONE. Requirement
-    # (Option D): every non-UTC TZID actually in use has a matching
-    # VTIMEZONE, the result stays parsable, and the instance is genuinely
-    # gone from the expansion.
+    # param, and both must end up with a matching VTIMEZONE: every non-UTC
+    # TZID actually in use has a matching VTIMEZONE, the result stays
+    # parsable, and the instance is genuinely gone from the expansion.
     non_iana_vtimezone = (
         "BEGIN:VTIMEZONE\r\n"
         "TZID:W. Europe Standard Time\r\n"
@@ -2480,7 +2480,7 @@ async def test_delete_event_non_iana_tzid_gets_a_matching_vtimezone():
 
 # --- Privacy: calendar_ref/account URL must never reach a log message ---
 # (found during a review of every _LOGGER call in caldav_target.py/
-# google_target.py that embeds calendar_ref -- same treatment as R5-07's own
+# google_target.py that embeds calendar_ref -- same treatment as the
 # poll-reachability logging: the subentry own display title, resolved via
 # target.resolve_subentry_title, replaces the raw calendar_ref/URL.)
 
