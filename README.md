@@ -26,6 +26,7 @@ Calendar Bridge talks directly to the Google Calendar REST API and to CalDAV (vi
 - Per-calendar defaults: default reminder minutes, default reminder method, and a default target calendar so `create_event` calls can omit those fields entirely
 - A CalDAV account whose password changes or expires prompts the standard Home Assistant "re-authenticate" repair flow instead of failing silently
 - Diagnostics download (Settings → Devices & Services → Calendar Bridge → ⋮ → Download diagnostics) for troubleshooting -- never includes your password or calendar addresses
+- Two auto-registered Lovelace "Create event" cards (phone and tablet layouts) — no manual resource to add, just pick them from the card picker
 
 ## Installation
 
@@ -91,6 +92,23 @@ bound, enforced for both backends. For an all-day event, a reminder anchors
 to a specific time of day (`reminder_time`, default 9:00 AM) at least one day
 before the event, instead of "N minutes before midnight" -- set `reminder_time`
 explicitly to change it.
+
+## Lovelace cards
+
+Calendar Bridge ships two "Create event" dashboard cards — no manual Lovelace resource to add, they're auto-registered by the integration and show up in the card picker (Edit Dashboard → Add Card → search "Calendar Bridge"):
+
+- `custom:calendar-bridge-create-card-mobile` — single-column, compact form for phones
+- `custom:calendar-bridge-create-card-tablet` — two-column layout that also exposes the reminder method (popup/email) and starts with the location/description fields expanded
+
+Both build their calendar picker straight from your existing Calendar Bridge devices (nothing to configure) and call `calendar_bridge.create_event` on submit, so a title, date, and calendar are all that's required for a quick entry:
+
+```yaml
+type: custom:calendar-bridge-create-card-mobile
+```
+
+```yaml
+type: custom:calendar-bridge-create-card-tablet
+```
 
 ## Development
 
