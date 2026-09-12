@@ -170,7 +170,8 @@
       },
       "abort": {
         "reconfigure_successful": "Kalender-Defaults aktualisiert.",
-        "cannot_connect": "Verbindung zum Server nicht möglich."
+        "cannot_connect": "Verbindung zum Server nicht möglich.",
+        "invalid_auth": "Authentifizierung fehlgeschlagen. Prüfe Benutzername/Passwort."
       }
     }
   },
@@ -233,6 +234,12 @@
     },
     "calendar_not_loaded": {
       "message": "Der Kalender für Gerät {device_id} ist gerade nicht geladen (das Konto wird möglicherweise neu geladen oder hat einen Einrichtungsfehler)."
+    },
+    "end_before_start": {
+      "message": "Das Ende des Termins muss nach seinem Start liegen."
+    },
+    "invalid_rrule": {
+      "message": "Die rrule ist keine gültige RFC-5545-Wiederholungsregel."
     }
   },
   "services": {

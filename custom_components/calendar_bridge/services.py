@@ -7,11 +7,13 @@ import logging
 from collections.abc import Mapping
 from typing import Any
 
+import icalendar
 import voluptuous as vol
+from gcal_sync.exceptions import ApiException
 from homeassistant.config_entries import ConfigEntry, ConfigEntryState
 from homeassistant.const import ATTR_DEVICE_ID
 from homeassistant.core import HomeAssistant, ServiceCall, ServiceResponse
-from homeassistant.exceptions import ServiceValidationError
+from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers import config_validation as cv
 
 from .caldav_target import CalDavAuthError, CalDavConnectionError
@@ -163,6 +165,47 @@ def _default_reminders(subentry_data: Mapping[str, Any]) -> tuple[ReminderSpec, 
     )
 
 
+def _ensure_end_after_start(all_day: bool | None, start: Any, end: Any) -> None:
+    """Reject end <= start for a timed event (R5-01).
+
+    Both backends otherwise silently rewrite it deep inside their own write
+    path (gcal_sync replaces it with start + 30 minutes) -- the action would
+    report success while saving a different time than requested. Deliberately
+    skipped for `all_day` (`all_day_bounds`' own end<=start -> next-day
+    correction is an intentional, pre-existing shorthand for a single-day
+    all-day event, not a bug this validates against) -- `all_day=None` (an
+    update_event call that didn't touch all_day) is treated as timed, the
+    same default `create_event`'s own schema uses.
+    """
+    if all_day or end is None or end > start:
+        return
+    raise ServiceValidationError(translation_domain=DOMAIN, translation_key="end_before_start")
+
+
+def _validate_rrule(rrule: str | None) -> None:
+    """Reject an unparseable rrule up front, without repairing it (R5-04).
+
+    Parses it exactly the way `caldav_target.py` eventually would
+    (`icalendar.vRecur.from_ical`) -- a falsy `rrule` (None, or "" which
+    `EventUpdate`/`_apply_updates_to_component` treat as "remove the
+    recurrence") is never validated, since there's no rule to check.
+    RFC 5545 requires FREQ on every RRULE; icalendar's own parser silently
+    drops unrecognized key=value pairs instead of raising for some
+    malformed input (e.g. a rule missing FREQ entirely), so that case is
+    checked explicitly.
+    """
+    if not rrule:
+        return
+    try:
+        parsed = icalendar.vRecur.from_ical(rrule)
+    except ValueError as err:
+        raise ServiceValidationError(
+            translation_domain=DOMAIN, translation_key="invalid_rrule"
+        ) from err
+    if "FREQ" not in parsed:
+        raise ServiceValidationError(translation_domain=DOMAIN, translation_key="invalid_rrule")
+
+
 async def async_handle_create_event(hass: HomeAssistant, call: ServiceCall) -> ServiceResponse:
     """Create the event on every targeted calendar (usually just one)."""
     device_ids: list[str] | None = call.data.get(ATTR_DEVICE_ID)
@@ -174,6 +217,9 @@ async def async_handle_create_event(hass: HomeAssistant, call: ServiceCall) -> S
                 translation_key="no_target",
             )
         device_ids = [default]
+
+    _ensure_end_after_start(call.data[ATTR_ALL_DAY], call.data[ATTR_START], call.data.get(ATTR_END))
+    _validate_rrule(call.data.get(ATTR_RRULE))
 
     explicit_reminders = _reminders_from_call(call.data)
     base_spec = EventSpec(
@@ -215,8 +261,11 @@ async def async_handle_create_event(hass: HomeAssistant, call: ServiceCall) -> S
                 translation_key="calendar_not_found",
                 translation_placeholders={"device_id": device_id},
             ) from err
-        except (CalDavAuthError, CalDavConnectionError) as err:
-            raise ServiceValidationError(
+        except (CalDavAuthError, CalDavConnectionError, ApiException) as err:
+            # A communication/backend failure, not a mistake in this call's
+            # own arguments -- HomeAssistantError, not ServiceValidationError
+            # (R5-05), so the normal stack trace/log entry isn't suppressed.
+            raise HomeAssistantError(
                 translation_domain=DOMAIN,
                 translation_key="calendar_unavailable",
                 translation_placeholders={"device_id": device_id},
@@ -310,6 +359,11 @@ async def async_handle_update_event(hass: HomeAssistant, call: ServiceCall) -> S
             translation_domain=DOMAIN,
             translation_key="occurrence_with_rrule_not_supported",
         )
+    if ATTR_START in call.data and ATTR_END in call.data:
+        _ensure_end_after_start(
+            call.data.get(ATTR_ALL_DAY), call.data[ATTR_START], call.data[ATTR_END]
+        )
+    _validate_rrule(call.data.get(ATTR_RRULE))
 
     entry, subentry_id = _async_resolve_single_device(hass, call.data)
     subentry = entry.subentries[subentry_id]
