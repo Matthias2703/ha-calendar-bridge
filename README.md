@@ -159,6 +159,12 @@ mypy --strict custom_components/calendar_bridge
 
 Feature-complete for its core use case (real reminders/recurrence on Google/CalDAV, reauthentication, diagnostics, dashboard cards) and available via HACS. Most Bronze/Silver/Gold quality-scale checks are done; the honest, item-by-item state -- including the handful still open -- is tracked in [`quality_scale.yaml`](custom_components/calendar_bridge/quality_scale.yaml).
 
+## ❤️ Support
+
+Calendar Bridge is free and open source.
+
+If you find it useful and would like to support continued development, you can sponsor my open-source work through [GitHub Sponsors](https://github.com/sponsors/Matthias2703).
+
 ## Also by me
 
 - [Hausgedächtnis](https://www.viema.digital/hausgedaechtnis/) — app for keeping all your home's paperwork (invoices, warranties, maintenance records, photos) in one place
