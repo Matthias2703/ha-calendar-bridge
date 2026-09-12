@@ -6,7 +6,8 @@
 [![hacs_badge](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://github.com/hacs/integration)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-<!-- TODO: screenshot or short GIF of the two Lovelace "Create event" cards goes here -->
+![The two Lovelace "Create event" cards -- compact phone layout on the left, two-column tablet layout on the right](docs/lovelace-cards.svg)
+*(Layout illustration -- actual card colors/fonts follow your Home Assistant theme.)*
 
 Calendar Bridge fills a gap in Home Assistant's calendar service: create Google Calendar and CalDAV/iCloud events with native reminders and recurrence, directly from Home Assistant.
 
