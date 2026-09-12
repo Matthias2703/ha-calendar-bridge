@@ -349,6 +349,86 @@ async def test_missing_calendar_raises_calendar_not_found():
         await target.async_create_event("https://example.test/cal/", spec)
 
 
+@pytest.mark.asyncio
+async def test_calendar_still_exists_true_when_the_account_still_lists_it():
+    target = _make_target()
+    mock_client, _mock_calendar = _mock_client_with_calendar("https://example.test/cal/")
+    with patch(
+        "custom_components.calendar_bridge.caldav_target.build_client",
+        return_value=mock_client,
+    ):
+        assert await target.async_calendar_still_exists("https://example.test/cal/") is True
+
+
+@pytest.mark.asyncio
+async def test_calendar_still_exists_false_when_the_account_no_longer_lists_it():
+    # Gold/stale-devices: this is the confirmed-gone signal a caller may
+    # act on (e.g. raise a repair issue) -- unlike a `None` account-level
+    # failure, which must never be read as "deleted".
+    target = _make_target()
+    mock_client = MagicMock()
+    mock_client.principal.return_value.calendars.return_value = []
+    with patch(
+        "custom_components.calendar_bridge.caldav_target.build_client",
+        return_value=mock_client,
+    ):
+        assert await target.async_calendar_still_exists("https://example.test/cal/") is False
+
+
+@pytest.mark.asyncio
+async def test_calendar_still_exists_returns_none_when_the_account_itself_is_unreachable():
+    target = _make_target()
+    mock_client = MagicMock()
+    mock_client.principal.side_effect = OSError("boom")
+    with patch(
+        "custom_components.calendar_bridge.caldav_target.build_client",
+        return_value=mock_client,
+    ):
+        assert await target.async_calendar_still_exists("https://example.test/cal/") is None
+
+
+@pytest.mark.asyncio
+async def test_test_connection_raises_auth_error_on_rejected_credentials():
+    target = _make_target()
+    mock_client = MagicMock()
+    mock_client.principal.side_effect = caldav.lib.error.AuthorizationError()
+    with (
+        patch(
+            "custom_components.calendar_bridge.caldav_target.build_client",
+            return_value=mock_client,
+        ),
+        pytest.raises(CalDavAuthError),
+    ):
+        await target.async_test_connection()
+
+
+@pytest.mark.asyncio
+async def test_test_connection_raises_connection_error_when_unreachable():
+    target = _make_target()
+    mock_client = MagicMock()
+    mock_client.principal.side_effect = OSError("boom")
+    with (
+        patch(
+            "custom_components.calendar_bridge.caldav_target.build_client",
+            return_value=mock_client,
+        ),
+        pytest.raises(CalDavConnectionError),
+    ):
+        await target.async_test_connection()
+
+
+@pytest.mark.asyncio
+async def test_test_connection_succeeds_silently_when_the_account_is_reachable():
+    target = _make_target()
+    mock_client = MagicMock()
+    mock_client.principal.return_value.calendars.return_value = []
+    with patch(
+        "custom_components.calendar_bridge.caldav_target.build_client",
+        return_value=mock_client,
+    ):
+        await target.async_test_connection()  # must not raise
+
+
 def _mock_caldav_event(
     summary: str,
     has_alarm: bool,

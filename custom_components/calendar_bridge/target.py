@@ -328,6 +328,24 @@ class CalendarNotFoundError(Exception):
 class CalendarTarget(Protocol):
     """Interface every calendar backend (Google, CalDAV, ...) must implement."""
 
+    async def async_test_connection(self) -> None:
+        """Verify the account itself is reachable, raising on failure.
+
+        Called once by `async_setup_entry` before completing setup, so a
+        dead/revoked account fails fast with a translated setup error
+        instead of silently loading and only surfacing the problem on the
+        first real service call or poll.
+        """
+        ...
+
+    async def async_calendar_still_exists(self, calendar_ref: str) -> bool | None:
+        """True/False if calendar_ref is confirmed present/absent among the account's calendars.
+
+        Returns `None` if the account itself couldn't be checked right now
+        (a transient failure) -- callers must never treat that as "deleted".
+        """
+        ...
+
     async def async_create_event(self, calendar_ref: str, spec: EventSpec) -> str:
         """Create an event on the given calendar, returning its backend UID."""
         ...

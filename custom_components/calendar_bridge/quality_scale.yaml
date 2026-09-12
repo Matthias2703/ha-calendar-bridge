@@ -11,33 +11,30 @@ rules:
       their common logic via the CalendarTarget protocol in target.py.
   config-flow: done
   config-flow-test-coverage:
-    status: todo
+    status: done
     comment: |
-      config_flow.py has no dedicated tests yet (0% coverage) — the plan
-      called for test_config_flow_google/caldav/reauth/test_config_subentry_flow.py,
-      none of which exist. Manual live verification only so far.
+      tests/test_config_flow_caldav_subentry_errors.py covers the CalDAV
+      subentry error paths.
   dependency-transparency: done
   docs-actions: done
   docs-high-level-description: done
   docs-installation-instructions: done
-  docs-removal-instructions:
-    status: todo
-    comment: |
-      README has no explicit "how to remove this integration" section.
+  docs-removal-instructions: done
   entity-event-setup: done
   entity-unique-id: done
   has-entity-name: done
   runtime-data: done
   test-before-configure:
-    status: todo
+    status: done
     comment: |
-      CalDAV config flow does not yet call principal().calendars() before
-      creating the entry to fail fast with cannot_connect/invalid_auth.
+      The CalDAV config flow calls discover_calendars() (principal().calendars())
+      before creating the entry, failing fast with cannot_connect/invalid_auth.
   test-before-setup:
-    status: todo
+    status: done
     comment: |
-      async_setup_entry does not verify the CalDAV/Google connection before
-      completing setup.
+      async_setup_entry calls the target's async_test_connection() before
+      completing setup, raising ConfigEntryAuthFailed/ConfigEntryNotReady
+      instead of loading against a dead/revoked account.
   unique-config-entry: done
 
   # Silver
@@ -65,23 +62,26 @@ rules:
       Not coordinator-based; each create_event call is independent and
       Home Assistant already serializes service calls to one entity/device.
   reauthentication-flow:
-    status: todo
+    status: done
     comment: |
-      Planned (ConfigEntryAuthFailed for Google, 401 refresh form for CalDAV)
-      but not implemented yet — a token/password error currently just fails.
+      CalDAV's async_step_reauth/async_step_reauth_confirm prompt for a new
+      password on a rejected-credentials failure (caldav_target.py's
+      _start_reauth); async_setup_entry's own connection check
+      (test-before-setup) also starts it via ConfigEntryAuthFailed.
   test-coverage:
     status: todo
     comment: |
-      CI coverage gate is 45%, not the Silver target of 95%. config_flow.py,
-      services.py, __init__.py, switch.py and number.py are largely untested;
-      only caldav_target.py/google_target.py are well covered.
+      CI coverage gate is 58%, total coverage 87% -- above the gate but
+      still short of the Silver target of 95%.
 
   # Gold (not targeted yet — recorded honestly per the project's own plan)
   devices: done
   diagnostics:
-    status: todo
+    status: done
     comment: |
-      Planned (diagnostics.py, redacting tokens/passwords) but not built.
+      diagnostics.py provides a per-entry download built from an explicit
+      allow-list -- the CalDAV password/URL, Google entry id, and any
+      calendar identifier are never included in the first place.
   discovery:
     status: exempt
     comment: |
@@ -104,7 +104,7 @@ rules:
       Not a device-integration; devices here represent calendars, not
       physical/vendor hardware with a support matrix.
   docs-supported-functions: done
-  docs-troubleshooting: todo
+  docs-troubleshooting: done
   docs-use-cases: done
   dynamic-devices: done
   entity-category:
@@ -130,22 +130,22 @@ rules:
     comment: |
       Every raised HomeAssistantError/ServiceValidationError, including the
       test-notify button's, uses translation_domain/translation_key (R5-09).
-  icon-translations:
-    status: todo
-    comment: |
-      icons.json from the original file layout plan was never created;
-      entities/services use default icons.
+  icon-translations: done
   reconfiguration-flow: done
   repair-issues:
-    status: exempt
+    status: done
     comment: |
-      No case identified yet where a persistent repair issue (rather than
-      a translated exception at call time) would be the right UX.
+      The periodic poll raises a "stale_calendar" repair issue once a
+      calendar is confirmed gone from the account (see stale-devices) --
+      not fixable in-UI, but tells the user which device to remove and why.
   stale-devices:
-    status: todo
+    status: done
     comment: |
-      A calendar deleted upstream isn't automatically flagged/removed from
-      the device registry.
+      The periodic poll checks async_calendar_still_exists() once a
+      calendar's poll fails, and raises a repair issue (never a silent
+      auto-removal, which could destroy user config/history on a false
+      positive) once the account itself confirms the calendar is gone --
+      as opposed to merely unreachable, which must not be flagged.
 
   # Platinum
   async-dependency: done

@@ -8,6 +8,7 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+from gcal_sync.exceptions import ApiException
 from homeassistant.components.frontend import add_extra_js_url
 from homeassistant.components.http import StaticPathConfig
 from homeassistant.config_entries import ConfigEntry, ConfigEntryState
@@ -23,12 +24,14 @@ from homeassistant.const import (
     Platform,
 )
 from homeassistant.core import Event, HomeAssistant, ServiceCall, ServiceResponse, SupportsResponse
+from homeassistant.exceptions import ConfigEntryAuthFailed, ConfigEntryNotReady
 from homeassistant.helpers import config_validation as cv
+from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers.event import async_track_time_interval
 from homeassistant.helpers.typing import ConfigType
 from homeassistant.util import dt as dt_util
 
-from .caldav_target import CalDavCalendarTarget
+from .caldav_target import CalDavAuthError, CalDavCalendarTarget, CalDavConnectionError
 from .const import (
     CONF_BACKFILL_EXTERNAL_EVENTS,
     CONF_CALENDAR_URL,
@@ -50,7 +53,7 @@ from .const import (
     SERVICE_UPDATE_EVENT,
 )
 from .device import async_create_or_update_device
-from .google_target import GoogleCalendarTarget
+from .google_target import GoogleAccountNotFoundError, GoogleCalendarTarget
 from .reminder_scheduler import ReminderScheduler
 from .seen_events import SeenEventsTracker
 from .services import (
@@ -133,6 +136,11 @@ def _log_poll_outcome(
             "Still failing to poll '%s' for new events", subentry_title, exc_info=exc_info
         )
     reachable_state[calendar_ref] = False
+
+
+def _stale_calendar_issue_id(subentry_id: str) -> str:
+    """Repair-issue id for `subentry_id`'s "calendar deleted upstream" warning (stale-devices)."""
+    return f"stale_calendar_{subentry_id}"
 
 
 def _live_calendar_refs_if_ready(hass: HomeAssistant) -> set[str] | None:
@@ -420,8 +428,27 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
                         _log_poll_outcome(
                             calendar_reachable, calendar_ref, subentry_title, ok=False
                         )
+                        # stale-devices: only ever raised once the account
+                        # *itself* confirms this one calendar is gone (a
+                        # `False` from `async_calendar_still_exists`) --
+                        # `None` (account unreachable/auth failure right
+                        # now) must never be treated as "deleted".
+                        still_exists = await target.async_calendar_still_exists(calendar_ref)
+                        if still_exists is False:
+                            ir.async_create_issue(
+                                hass,
+                                DOMAIN,
+                                _stale_calendar_issue_id(subentry.subentry_id),
+                                is_fixable=False,
+                                severity=ir.IssueSeverity.WARNING,
+                                translation_key="stale_calendar",
+                                translation_placeholders={"name": subentry_title},
+                            )
                         continue
                     _log_poll_outcome(calendar_reachable, calendar_ref, subentry_title, ok=True)
+                    ir.async_delete_issue(
+                        hass, DOMAIN, _stale_calendar_issue_id(subentry.subentry_id)
+                    )
                     await seen_events.async_add(calendar_ref, {seen.uid for seen in found})
 
                     # Paket A1: every real (non-marker) upcoming event gets a
@@ -479,12 +506,11 @@ async def _async_register_frontend_cards(hass: HomeAssistant) -> None:
 
 async def async_setup_entry(hass: HomeAssistant, entry: CalendarBridgeConfigEntry) -> bool:
     """Set up a Calendar Bridge account (CalDAV or Google) from a config entry."""
+    target: CalDavCalendarTarget | GoogleCalendarTarget
     if CONF_GOOGLE_ENTRY_ID in entry.data:
-        entry.runtime_data = GoogleCalendarTarget(
-            hass, entry.entry_id, entry.data[CONF_GOOGLE_ENTRY_ID]
-        )
+        target = GoogleCalendarTarget(hass, entry.entry_id, entry.data[CONF_GOOGLE_ENTRY_ID])
     else:
-        entry.runtime_data = CalDavCalendarTarget(
+        target = CalDavCalendarTarget(
             hass,
             entry.entry_id,
             entry.data[CONF_URL],
@@ -493,6 +519,19 @@ async def async_setup_entry(hass: HomeAssistant, entry: CalendarBridgeConfigEntr
             entry.data[CONF_VERIFY_SSL],
             entry.data[CONF_USERNAME],
         )
+
+    # test-before-setup: fail fast (retryable `ConfigEntryNotReady`, or
+    # `ConfigEntryAuthFailed` to start reauth) instead of completing setup
+    # against a dead/revoked account and only surfacing that on the first
+    # real service call or poll, 60s-1h later.
+    try:
+        await target.async_test_connection()
+    except CalDavAuthError as err:
+        raise ConfigEntryAuthFailed("Rejected CalDAV credentials") from err
+    except (CalDavConnectionError, GoogleAccountNotFoundError, ApiException) as err:
+        raise ConfigEntryNotReady("Could not reach the calendar account") from err
+
+    entry.runtime_data = target
 
     for subentry_id, subentry in entry.subentries.items():
         async_create_or_update_device(hass, entry, subentry_id, subentry.data[CONF_DISPLAY_NAME])
@@ -527,6 +566,7 @@ async def _async_handle_entry_updated(
     for subentry_id in scheduler.subentry_ids_with_entries(entry.entry_id):
         if subentry_id not in current_subentry_ids:
             await scheduler.async_purge_subentry(entry.entry_id, subentry_id, calendar_only=False)
+            ir.async_delete_issue(hass, DOMAIN, _stale_calendar_issue_id(subentry_id))
     for subentry_id, subentry in entry.subentries.items():
         if not subentry.data.get(CONF_NOTIFY_ENABLED, DEFAULT_NOTIFY_ENABLED):
             await scheduler.async_purge_subentry(entry.entry_id, subentry_id, calendar_only=True)
@@ -566,6 +606,8 @@ async def async_remove_entry(hass: HomeAssistant, entry: CalendarBridgeConfigEnt
     scheduler: ReminderScheduler = hass.data[DOMAIN]["reminder_scheduler"]
     seen_events: SeenEventsTracker = hass.data[DOMAIN]["seen_events"]
     await scheduler.async_remove_entry_data(entry.entry_id)
+    for subentry_id in entry.subentries:
+        ir.async_delete_issue(hass, DOMAIN, _stale_calendar_issue_id(subentry_id))
     if not hass.config_entries.async_entries(DOMAIN):
         await scheduler.async_remove_store()
         await seen_events.async_remove_store()

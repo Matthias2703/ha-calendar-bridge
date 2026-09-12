@@ -180,6 +180,31 @@ class CalDavCalendarTarget:
             self._start_reauth()
             raise
 
+    async def async_test_connection(self) -> None:
+        """Verify the account is reachable; raises CalDavAuthError/CalDavConnectionError.
+
+        Deliberately bypasses `_async_run`'s reauth-trigger side effect --
+        `async_setup_entry` turns a `CalDavAuthError` raised here into
+        `ConfigEntryAuthFailed`, which Home Assistant's own config-entry
+        setup already starts reauth for; doing it a second time here would
+        just be redundant.
+        """
+        client = build_client(self._url, self._username, self._password, self._verify_ssl)
+        await self._hass.async_add_executor_job(discover_calendars, client)
+
+    async def async_calendar_still_exists(self, calendar_ref: str) -> bool | None:
+        """True/False if calendar_ref is still among the account's calendars.
+
+        None if the account itself couldn't be reached this check --
+        callers must never treat that as "deleted".
+        """
+        client = build_client(self._url, self._username, self._password, self._verify_ssl)
+        try:
+            calendar = await self._async_run(self._find_calendar, client, calendar_ref)
+        except CalDavAuthError, CalDavConnectionError:
+            return None
+        return calendar is not None
+
     async def async_create_event(self, calendar_ref: str, spec: EventSpec) -> str:
         """Build the ICS for spec and PUT it to the given calendar URL."""
         ical_text, uid = self._build_ical(spec)
