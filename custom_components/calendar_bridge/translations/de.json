@@ -300,7 +300,7 @@
         },
         "uid": {
           "name": "Termin-UID",
-          "description": "Die uid des Termins -- create_events Antwort hat die Form {\"created\": {device_id: uid}}, ein Eintrag pro angesprochenem Kalender; die uid für dieses Gerät dort nachschlagen."
+          "description": "Die uid des Termins. create_events Antwort enthält ein 'created'-Objekt, das jede angesprochene device_id auf ihre eigene uid abbildet -- die uid für dieses Gerät dort nachschlagen."
         },
         "occurrence": {
           "name": "Vorkommen",
@@ -318,7 +318,7 @@
         },
         "uid": {
           "name": "Termin-UID",
-          "description": "Die uid des Termins -- create_events Antwort hat die Form {\"created\": {device_id: uid}}, ein Eintrag pro angesprochenem Kalender; die uid für dieses Gerät dort nachschlagen."
+          "description": "Die uid des Termins. create_events Antwort enthält ein 'created'-Objekt, das jede angesprochene device_id auf ihre eigene uid abbildet -- die uid für dieses Gerät dort nachschlagen."
         },
         "occurrence": {
           "name": "Vorkommen",

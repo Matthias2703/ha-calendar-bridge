@@ -300,7 +300,7 @@
         },
         "uid": {
           "name": "Event UID",
-          "description": "The event's uid -- create_event's response is {\"created\": {device_id: uid}}, one entry per targeted calendar; look up this device's own uid there."
+          "description": "The event's uid. create_event's response has a 'created' object mapping each targeted device_id to its own uid -- look up this device's uid there."
         },
         "occurrence": {
           "name": "Occurrence",
@@ -318,7 +318,7 @@
         },
         "uid": {
           "name": "Event UID",
-          "description": "The event's uid -- create_event's response is {\"created\": {device_id: uid}}, one entry per targeted calendar; look up this device's own uid there."
+          "description": "The event's uid. create_event's response has a 'created' object mapping each targeted device_id to its own uid -- look up this device's uid there."
         },
         "occurrence": {
           "name": "Occurrence",
