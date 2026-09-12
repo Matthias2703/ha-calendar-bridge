@@ -381,7 +381,7 @@ class GoogleCalendarTarget:
         """
         try:
             calendars = await async_list_writable_calendars(self._hass, self._google_entry_id)
-        except (ApiException, GoogleAccountNotFoundError):
+        except ApiException, GoogleAccountNotFoundError:
             return None
         return any(calendar.id == calendar_ref for calendar in calendars)
 

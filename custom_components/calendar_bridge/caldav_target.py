@@ -201,7 +201,7 @@ class CalDavCalendarTarget:
         client = build_client(self._url, self._username, self._password, self._verify_ssl)
         try:
             calendar = await self._async_run(self._find_calendar, client, calendar_ref)
-        except (CalDavAuthError, CalDavConnectionError):
+        except CalDavAuthError, CalDavConnectionError:
             return None
         return calendar is not None
 
