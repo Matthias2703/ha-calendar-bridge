@@ -13,13 +13,13 @@ Calendar Bridge fills a gap in Home Assistant's calendar service: create Google 
 
 - **Native reminders** — a real popup/email alarm on the event itself, shown by Google/iOS/your calendar app, not just an HA notification
 - **Recurring events** — full RRULE support, including editing or deleting a single occurrence of a series
-- **Google Calendar + CalDAV/iCloud** — reuses your existing account, no new entities or duplicated calendars
+- **Google Calendar + CalDAV/iCloud** — reuses your existing account, no duplicate `calendar.*` entities
 
 ## Why
 
 Home Assistant's built-in `calendar.create_event` service can't set a reminder/alarm on an event, on any backend — the shared `CalendarEvent` data model simply has no reminder field. It also rejects the `rrule` key outright, so recurring events aren't possible through the core service either.
 
-Calendar Bridge talks directly to the Google Calendar REST API and to CalDAV (via a hand-built iCalendar `VALARM`), sitting next to your existing `google`/`caldav` integrations without touching them — no new entities, no duplicated calendars.
+Calendar Bridge talks directly to the Google Calendar REST API and to CalDAV (via a hand-built iCalendar `VALARM`), sitting next to your existing `google`/`caldav` integrations without touching them — it adds a handful of its own small configuration entities per calendar (see Features below), but never duplicates your `calendar.*` entities.
 
 ## Features
 
@@ -36,6 +36,8 @@ Calendar Bridge talks directly to the Google Calendar REST API and to CalDAV (vi
 - Two auto-registered Lovelace "Create event" cards (phone and tablet layouts) — no manual resource to add, just pick them from the card picker
 
 ## Installation
+
+Requires **Home Assistant 2026.3.0 or newer**.
 
 This integration isn't (yet) in the default HACS store -- it can be installed as a *custom repository* instead, which is fully supported by HACS and doesn't need the default-store listing to work.
 
@@ -110,11 +112,23 @@ data:
   occurrence: "2026-10-15 09:00:00"
 ```
 
-Reminder minutes are capped at 40320 (28 days) -- Google Calendar's own upper
-bound, enforced for both backends. For an all-day event, a reminder anchors
-to a specific time of day (`reminder_time`, default 9:00 AM) at least one day
-before the event, instead of "N minutes before midnight" -- set `reminder_time`
-explicitly to change it.
+Independently of the native reminder, `create_event`'s `notify` field schedules a Home Assistant notification (e.g. to your phone) before that one event:
+
+```yaml
+action: calendar_bridge.create_event
+target:
+  device_id: <device id of the target calendar>
+data:
+  summary: Dentist appointment
+  start: "2026-10-01 09:00:00"
+  end: "2026-10-01 09:30:00"
+  notify:
+    target: notify.mobile_app_your_phone
+    minutes_before: 60
+    # message: "Reminder: {summary}"  # optional, defaults shown
+```
+
+Native reminder minutes (`reminder_minutes`/`reminders`, and the per-calendar HA notification's lead time) are capped at 40320 (28 days) -- Google Calendar's own upper bound, enforced for both backends. `notify.minutes_before` on a single `create_event` call has no such cap. For an all-day event, a native reminder anchors to a specific time of day (`reminder_time`, default 9:00 AM) at least one day before the event, instead of "N minutes before midnight" -- set `reminder_time` explicitly to change it.
 
 ## Lovelace cards
 
