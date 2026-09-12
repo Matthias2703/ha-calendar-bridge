@@ -8,7 +8,7 @@ from collections.abc import Mapping
 from typing import Any
 
 import voluptuous as vol
-from homeassistant.config_entries import ConfigEntry
+from homeassistant.config_entries import ConfigEntry, ConfigEntryState
 from homeassistant.const import ATTR_DEVICE_ID
 from homeassistant.core import HomeAssistant, ServiceCall, ServiceResponse
 from homeassistant.exceptions import ServiceValidationError
@@ -196,6 +196,7 @@ async def async_handle_create_event(hass: HomeAssistant, call: ServiceCall) -> S
                 translation_placeholders={"device_id": device_id},
             )
         entry, subentry_id = resolved
+        _ensure_entry_loaded(entry, device_id)
         subentry = entry.subentries[subentry_id]
 
         reminders = (
@@ -230,6 +231,24 @@ async def async_handle_create_event(hass: HomeAssistant, call: ServiceCall) -> S
     return {"created": created}
 
 
+def _ensure_entry_loaded(entry: ConfigEntry, device_id: str) -> None:
+    """Raise a translated error for a device whose account isn't currently loaded.
+
+    A device stays in the device registry across an unload/reload/setup
+    failure -- `async_resolve_device` alone can't tell a genuinely-gone
+    device apart from one whose entry just isn't loaded right now. HA
+    deletes `entry.runtime_data` entirely on unload (R5-02), so every
+    caller must check this *before* dereferencing it, or get a raw
+    AttributeError instead of a clean, user-facing message.
+    """
+    if entry.state is not ConfigEntryState.LOADED:
+        raise ServiceValidationError(
+            translation_domain=DOMAIN,
+            translation_key="calendar_not_loaded",
+            translation_placeholders={"device_id": device_id},
+        )
+
+
 def _async_resolve_single_device(
     hass: HomeAssistant, call_data: Mapping[str, Any]
 ) -> tuple[ConfigEntry, str]:
@@ -250,6 +269,7 @@ def _async_resolve_single_device(
             translation_key="device_not_found",
             translation_placeholders={"device_id": device_id},
         )
+    _ensure_entry_loaded(resolved[0], device_id)
     return resolved
 
 

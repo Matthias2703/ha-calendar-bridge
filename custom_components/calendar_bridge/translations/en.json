@@ -227,6 +227,12 @@
     },
     "occurrence_with_rrule_not_supported": {
       "message": "A single occurrence cannot have its own rrule -- pass occurrence to change one instance, or rrule to change the whole series, not both."
+    },
+    "no_notify_target": {
+      "message": "No notification target configured for this calendar."
+    },
+    "calendar_not_loaded": {
+      "message": "The calendar for device {device_id} is not currently loaded (its account may be reloading or have a setup error)."
     }
   },
   "services": {
@@ -294,7 +300,7 @@
         },
         "uid": {
           "name": "Event UID",
-          "description": "The event's uid, as returned by create_event (the 'created' field in its response)."
+          "description": "The event's uid -- create_event's response is {\"created\": {device_id: uid}}, one entry per targeted calendar; look up this device's own uid there."
         },
         "occurrence": {
           "name": "Occurrence",
@@ -312,7 +318,7 @@
         },
         "uid": {
           "name": "Event UID",
-          "description": "The event's uid, as returned by create_event (the 'created' field in its response)."
+          "description": "The event's uid -- create_event's response is {\"created\": {device_id: uid}}, one entry per targeted calendar; look up this device's own uid there."
         },
         "occurrence": {
           "name": "Occurrence",

@@ -227,6 +227,12 @@
     },
     "occurrence_with_rrule_not_supported": {
       "message": "Eine einzelne Instanz kann keine eigene rrule haben -- gib occurrence an, um eine Instanz zu ändern, oder rrule, um die ganze Serie zu ändern, aber nicht beides."
+    },
+    "no_notify_target": {
+      "message": "Für diesen Kalender ist kein Benachrichtigungsziel konfiguriert."
+    },
+    "calendar_not_loaded": {
+      "message": "Der Kalender für Gerät {device_id} ist gerade nicht geladen (das Konto wird möglicherweise neu geladen oder hat einen Einrichtungsfehler)."
     }
   },
   "services": {
@@ -294,7 +300,7 @@
         },
         "uid": {
           "name": "Termin-UID",
-          "description": "Die uid des Termins, wie von create_event zurückgegeben (das Feld 'created' in dessen Antwort)."
+          "description": "Die uid des Termins -- create_events Antwort hat die Form {\"created\": {device_id: uid}}, ein Eintrag pro angesprochenem Kalender; die uid für dieses Gerät dort nachschlagen."
         },
         "occurrence": {
           "name": "Vorkommen",
@@ -312,7 +318,7 @@
         },
         "uid": {
           "name": "Termin-UID",
-          "description": "Die uid des Termins, wie von create_event zurückgegeben (das Feld 'created' in dessen Antwort)."
+          "description": "Die uid des Termins -- create_events Antwort hat die Form {\"created\": {device_id: uid}}, ein Eintrag pro angesprochenem Kalender; die uid für dieses Gerät dort nachschlagen."
         },
         "occurrence": {
           "name": "Vorkommen",
