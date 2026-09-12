@@ -207,6 +207,12 @@
       }
     }
   },
+  "issues": {
+    "stale_calendar": {
+      "title": "Kalender nicht mehr gefunden: {name}",
+      "description": "Calendar Bridge findet \"{name}\" nicht mehr unter den Kalendern dieses Kontos -- er wurde vermutlich gelöscht oder die Freigabe wurde aufgehoben. Erinnerungen und das Abfragen dafür schlagen weiterhin fehl, bis du diesen Kalender entfernst (Einstellungen → Geräte & Dienste → Calendar Bridge → Gerät \"{name}\" → Gerät löschen)."
+    }
+  },
   "exceptions": {
     "device_not_found": {
       "message": "Gerät {device_id} ist kein Calendar-Bridge-Kalender."

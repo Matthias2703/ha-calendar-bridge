@@ -342,6 +342,63 @@ async def test_create_event_raises_calendar_not_found_on_a_404():
 
 
 @pytest.mark.asyncio
+async def test_calendar_still_exists_true_when_the_account_still_lists_it():
+    target = _make_target()
+    mock_calendar = MagicMock(id=_CALENDAR_REF)
+    with patch(
+        "custom_components.calendar_bridge.google_target.async_list_writable_calendars",
+        new=AsyncMock(return_value=[mock_calendar]),
+    ):
+        assert await target.async_calendar_still_exists(_CALENDAR_REF) is True
+
+
+@pytest.mark.asyncio
+async def test_calendar_still_exists_false_when_the_account_no_longer_lists_it():
+    # Gold/stale-devices: this is the confirmed-gone signal a caller may
+    # act on (e.g. raise a repair issue) -- unlike a `None` account-level
+    # failure, which must never be read as "deleted".
+    target = _make_target()
+    with patch(
+        "custom_components.calendar_bridge.google_target.async_list_writable_calendars",
+        new=AsyncMock(return_value=[]),
+    ):
+        assert await target.async_calendar_still_exists(_CALENDAR_REF) is False
+
+
+@pytest.mark.asyncio
+async def test_calendar_still_exists_returns_none_when_the_account_itself_is_unreachable():
+    target = _make_target()
+    with patch(
+        "custom_components.calendar_bridge.google_target.async_list_writable_calendars",
+        new=AsyncMock(side_effect=ApiException("boom")),
+    ):
+        assert await target.async_calendar_still_exists(_CALENDAR_REF) is None
+
+
+@pytest.mark.asyncio
+async def test_test_connection_raises_on_an_api_failure():
+    target = _make_target()
+    with (
+        patch(
+            "custom_components.calendar_bridge.google_target.async_list_writable_calendars",
+            new=AsyncMock(side_effect=ApiException("boom")),
+        ),
+        pytest.raises(ApiException),
+    ):
+        await target.async_test_connection()
+
+
+@pytest.mark.asyncio
+async def test_test_connection_succeeds_silently_when_the_account_is_reachable():
+    target = _make_target()
+    with patch(
+        "custom_components.calendar_bridge.google_target.async_list_writable_calendars",
+        new=AsyncMock(return_value=[]),
+    ):
+        await target.async_test_connection()  # must not raise
+
+
+@pytest.mark.asyncio
 async def test_backfill_reminder_adds_a_reminder_to_the_matching_reminder_less_event():
     target = _make_target()
     service = _FakeService([_google_event("evt1", "Poll test")])

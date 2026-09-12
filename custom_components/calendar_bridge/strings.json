@@ -207,6 +207,12 @@
       }
     }
   },
+  "issues": {
+    "stale_calendar": {
+      "title": "Calendar no longer found: {name}",
+      "description": "Calendar Bridge can no longer find \"{name}\" among this account's calendars -- it looks like it was deleted or unshared. Reminders and polling for it will keep failing until you remove this calendar (Settings → Devices & Services → Calendar Bridge → the \"{name}\" device → Delete device)."
+    }
+  },
   "exceptions": {
     "device_not_found": {
       "message": "Device {device_id} is not a Calendar Bridge calendar."

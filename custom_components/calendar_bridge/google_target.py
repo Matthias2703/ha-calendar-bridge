@@ -369,6 +369,22 @@ class GoogleCalendarTarget:
         auth = _GoogleSessionAuth(async_get_clientsession(self._hass), session)
         return GoogleCalendarService(auth), auth
 
+    async def async_test_connection(self) -> None:
+        """Verify the account is reachable; raises GoogleAccountNotFoundError/ApiException."""
+        await async_list_writable_calendars(self._hass, self._google_entry_id)
+
+    async def async_calendar_still_exists(self, calendar_ref: str) -> bool | None:
+        """True/False if calendar_ref is still among the account's writable calendars.
+
+        None if the account itself couldn't be listed this check --
+        callers must never treat that as "deleted".
+        """
+        try:
+            calendars = await async_list_writable_calendars(self._hass, self._google_entry_id)
+        except (ApiException, GoogleAccountNotFoundError):
+            return None
+        return any(calendar.id == calendar_ref for calendar in calendars)
+
     async def async_create_event(self, calendar_ref: str, spec: EventSpec) -> str:
         """Create spec on calendar_ref, returning the event's iCalUID."""
         _, auth = await self._async_service()

@@ -110,6 +110,19 @@ type: custom:calendar-bridge-create-card-mobile
 type: custom:calendar-bridge-create-card-tablet
 ```
 
+## Troubleshooting
+
+- **A create/delete/update call fails with "could not be reached" or "no longer be found":** the target calendar's account is temporarily unreachable, or the calendar itself was renamed/deleted on the server. Check Settings → Devices & Services → Calendar Bridge for a repair/reauthenticate prompt.
+- **"Calendar no longer found" repair notification:** the periodic poll couldn't find one of your configured calendars among the account's calendars anymore -- it was likely deleted or unshared upstream. Remove that calendar's device (Settings → Devices & Services → Calendar Bridge → the device → ⋮ → Delete device) once you've confirmed it's really gone.
+- **A CalDAV account stops working after a password change:** Home Assistant shows a "reauthenticate" prompt for that account (Settings → Devices & Services); enter the new password there, nothing else needs reconfiguring.
+- **Diagnostics:** Settings → Devices & Services → Calendar Bridge → ⋮ → Download diagnostics gives a redacted snapshot (no password/tokens/calendar addresses) worth attaching to a bug report.
+- Still stuck? [Open an issue](https://github.com/Matthias2703/ha-calendar-bridge/issues) with the diagnostics download and the Home Assistant log around the failure (Settings → System → Logs, filtered to `calendar_bridge`).
+
+## Removing the integration
+
+1. Settings → Devices & Services → Calendar Bridge → ⋮ → Delete for each account you've added. This removes its devices, entities, and any pending Home Assistant notifications for its calendars -- it never touches the events themselves on Google/CalDAV.
+2. Once every Calendar Bridge account is removed, uninstall it from HACS (HACS → Calendar Bridge → ⋮ → Remove) and restart Home Assistant.
+
 ## Development
 
 ```bash
@@ -121,7 +134,7 @@ mypy --strict custom_components/calendar_bridge
 
 ## Status
 
-Early development — see [open issues](https://github.com/Matthias2703/ha-calendar-bridge/issues) and the project roadmap for current scope.
+Feature-complete for its core use case (real reminders/recurrence on Google/CalDAV, reauthentication, diagnostics, dashboard cards) and available via HACS. Most Bronze/Silver/Gold quality-scale checks are done; the honest, item-by-item state -- including the handful still open -- is tracked in [`quality_scale.yaml`](custom_components/calendar_bridge/quality_scale.yaml).
 
 ## Also by me
 

@@ -345,5 +345,48 @@ async def test_register_frontend_cards_registers_the_static_path_and_extra_js_ur
     assert len(configs) == 1
     assert configs[0].url_path == "/calendar_bridge/calendar-bridge-cards.js"
     assert configs[0].path.endswith("calendar-bridge-cards.js")
-
     mock_add_js.assert_called_once_with(hass, "/calendar_bridge/calendar-bridge-cards.js")
+
+
+# --- test-before-setup ---
+
+
+@pytest.mark.asyncio
+async def test_setup_entry_starts_reauth_on_rejected_credentials(
+    hass: HomeAssistant, enable_custom_integrations: None
+) -> None:
+    # Bronze/test-before-setup: a dead account must fail setup up front
+    # instead of loading anyway and only surfacing the problem on the
+    # first real service call or poll, 60s-1h later.
+    entry = _make_minimal_caldav_entry()
+    entry.add_to_hass(hass)
+
+    with patch(
+        "custom_components.calendar_bridge.caldav_target.CalDavCalendarTarget"
+        ".async_test_connection",
+        new=AsyncMock(side_effect=calendar_bridge.CalDavAuthError()),
+    ):
+        assert not await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+
+    assert entry.state is calendar_bridge.ConfigEntryState.SETUP_ERROR
+    flows = hass.config_entries.flow.async_progress_by_handler(DOMAIN)
+    assert any(flow["context"].get("source") == "reauth" for flow in flows)
+
+
+@pytest.mark.asyncio
+async def test_setup_entry_retries_on_a_transient_connection_failure(
+    hass: HomeAssistant, enable_custom_integrations: None
+) -> None:
+    entry = _make_minimal_caldav_entry()
+    entry.add_to_hass(hass)
+
+    with patch(
+        "custom_components.calendar_bridge.caldav_target.CalDavCalendarTarget"
+        ".async_test_connection",
+        new=AsyncMock(side_effect=calendar_bridge.CalDavConnectionError()),
+    ):
+        assert not await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+
+    assert entry.state is calendar_bridge.ConfigEntryState.SETUP_RETRY

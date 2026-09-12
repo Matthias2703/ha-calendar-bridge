@@ -14,5 +14,5 @@
     "recurring-ical-events==3.8.2",
     "gcal-sync==9.1.1"
   ],
-  "version": "0.3.0"
+  "version": "0.4.0"
 }

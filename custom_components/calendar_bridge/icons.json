@@ -1,0 +1,30 @@
+{
+  "entity": {
+    "switch": {
+      "automatic_reminder": {
+        "default": "mdi:bell-ring-outline"
+      },
+      "notify_enabled": {
+        "default": "mdi:cellphone-message"
+      }
+    },
+    "number": {
+      "reminder_minutes": {
+        "default": "mdi:timer-outline"
+      },
+      "notify_minutes": {
+        "default": "mdi:timer-alert-outline"
+      }
+    },
+    "button": {
+      "test_notify": {
+        "default": "mdi:bell-check-outline"
+      }
+    }
+  },
+  "services": {
+    "create_event": "mdi:calendar-plus",
+    "delete_event": "mdi:calendar-remove",
+    "update_event": "mdi:calendar-edit"
+  }
+}

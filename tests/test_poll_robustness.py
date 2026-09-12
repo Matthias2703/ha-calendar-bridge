@@ -18,6 +18,7 @@ from unittest.mock import AsyncMock
 import pytest
 from homeassistant.const import CONF_PASSWORD, CONF_URL, CONF_USERNAME, CONF_VERIFY_SSL
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import issue_registry as ir
 from homeassistant.util import dt as dt_util
 from pytest_homeassistant_custom_component.common import MockConfigEntry, async_fire_time_changed
 
@@ -162,6 +163,94 @@ async def test_found_none_without_an_exception_is_also_logged_and_throttled(
 
     warnings = [r for r in caplog.records if r.levelname == "WARNING"]
     assert len(warnings) == 1
+
+
+@pytest.mark.asyncio
+async def test_stale_devices_issue_is_raised_once_the_calendar_is_confirmed_gone(
+    hass: HomeAssistant, enable_custom_integrations: None, freezer
+) -> None:
+    # Gold/stale-devices: a poll failure alone (`found is None`) is never
+    # enough -- it could just be a transient network/auth blip. The repair
+    # issue must only appear once `async_calendar_still_exists` explicitly
+    # confirms the calendar itself is gone from the account.
+    entry = _make_entry()
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    mock_target = AsyncMock()
+    mock_target.async_backfill_new_events = AsyncMock(return_value=None)
+    mock_target.async_calendar_still_exists = AsyncMock(return_value=False)
+    entry.runtime_data = mock_target
+
+    at = dt_util.utcnow() + timedelta(seconds=61)
+    freezer.move_to(at)
+    async_fire_time_changed(hass, at)
+    await hass.async_block_till_done(wait_background_tasks=True)
+
+    issue_registry = ir.async_get(hass)
+    subentry_id = next(iter(entry.subentries))
+    assert issue_registry.async_get_issue(DOMAIN, f"stale_calendar_{subentry_id}") is not None
+
+
+@pytest.mark.asyncio
+async def test_stale_devices_issue_is_not_raised_when_the_account_is_merely_unreachable(
+    hass: HomeAssistant, enable_custom_integrations: None, freezer
+) -> None:
+    # `async_calendar_still_exists` returning None means "couldn't check
+    # right now" (e.g. the same outage that made the poll itself fail) --
+    # that must never be misread as "confirmed deleted".
+    entry = _make_entry()
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    mock_target = AsyncMock()
+    mock_target.async_backfill_new_events = AsyncMock(return_value=None)
+    mock_target.async_calendar_still_exists = AsyncMock(return_value=None)
+    entry.runtime_data = mock_target
+
+    at = dt_util.utcnow() + timedelta(seconds=61)
+    freezer.move_to(at)
+    async_fire_time_changed(hass, at)
+    await hass.async_block_till_done(wait_background_tasks=True)
+
+    issue_registry = ir.async_get(hass)
+    subentry_id = next(iter(entry.subentries))
+    assert issue_registry.async_get_issue(DOMAIN, f"stale_calendar_{subentry_id}") is None
+
+
+@pytest.mark.asyncio
+async def test_stale_devices_issue_clears_once_the_calendar_polls_successfully_again(
+    hass: HomeAssistant, enable_custom_integrations: None, freezer
+) -> None:
+    entry = _make_entry()
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    subentry_id = next(iter(entry.subentries))
+    ir.async_create_issue(
+        hass,
+        DOMAIN,
+        f"stale_calendar_{subentry_id}",
+        is_fixable=False,
+        severity=ir.IssueSeverity.WARNING,
+        translation_key="stale_calendar",
+        translation_placeholders={"name": _TITLE},
+    )
+    issue_registry = ir.async_get(hass)
+
+    mock_target = AsyncMock()
+    mock_target.async_backfill_new_events = AsyncMock(return_value=set())
+    entry.runtime_data = mock_target
+
+    at = dt_util.utcnow() + timedelta(seconds=61)
+    freezer.move_to(at)
+    async_fire_time_changed(hass, at)
+    await hass.async_block_till_done(wait_background_tasks=True)
+
+    assert issue_registry.async_get_issue(DOMAIN, f"stale_calendar_{subentry_id}") is None
 
 
 @pytest.mark.asyncio
