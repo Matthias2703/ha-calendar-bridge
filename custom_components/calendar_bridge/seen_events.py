@@ -4,7 +4,7 @@ The periodic poll (see `__init__.py`) has to tell a genuinely new event apart
 from one it has already checked -- otherwise every poll would re-backfill a
 reminder onto any event a user deliberately removed one from. This persists,
 per calendar, each already-seen UID together with the date it was last seen
-(schema v2, A2/R4-07) -- so a UID that stops appearing (event deleted, or a
+-- so a UID that stops appearing (event deleted, or a
 series instance that will never recur) can eventually be pruned instead of
 growing this store forever, while a UID still part of an infrequent yearly
 series survives as long as it (or a sibling instance/master marker sharing
@@ -28,7 +28,7 @@ _STORAGE_KEY = f"{DOMAIN}_seen_events"
 
 # How long a UID may go unseen before it's pruned from a calendar's known-UID
 # set -- wide enough to comfortably outlive a yearly recurring event's own
-# gap between instances (B1-01/D1).
+# gap between instances.
 SEEN_PRUNE_AGE = timedelta(days=400)
 
 
@@ -126,5 +126,5 @@ class SeenEventsTracker:
             await self._store.async_save(self._data)
 
     async def async_remove_store(self) -> None:
-        """Delete the whole store file (called once no config entry is left, R6-03)."""
+        """Delete the whole store file (called once no config entry is left)."""
         await self._store.async_remove()

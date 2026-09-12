@@ -240,8 +240,8 @@ def _build_event(spec: EventSpec) -> GoogleEvent:
     # an event that's supposed to have zero reminders must say `useDefault:
     # false` with no overrides, otherwise Google treats it as `useDefault:
     # true` and silently attaches the calendar's own default reminder.
-    # Google's `overrides[].minutes` (Paket C, point 6) is a plain integer
-    # count of minutes before the event's start -- unlike a CalDAV VALARM's
+    # Google's `overrides[].minutes` is a plain integer count of minutes
+    # before the event's start -- unlike a CalDAV VALARM's
     # TRIGGER, it has no day/week unit at all, so it's inherently a fixed
     # duration with no RFC-5545-style "nominal calendar day" ambiguity to
     # worry about here (see `effective_reminder_minutes` for how an
@@ -533,7 +533,7 @@ class GoogleCalendarTarget:
                     continue
                 ical_uid = event.ical_uuid or uid
                 master_id = event.recurring_event_id
-                # Paket A1's cross-backend notification identity: a series
+                # Cross-backend notification identity: a series
                 # instance embeds its *original* start (stable across a
                 # later move -- `original_start_time` is populated on every
                 # regular `events.list` response, see `EVENT_FIELDS`), a
@@ -582,19 +582,19 @@ class GoogleCalendarTarget:
                         (sibling.id or sibling.ical_uuid) in known_uids
                         for sibling in instances_by_master.get(master_id, [])
                     )
-                    # Known limitation (B1-01): an existing sparse series whose
-                    # prior instance lies outside this search window has no
-                    # visible sibling to associate with its stored instance id.
-                    # Mostly mitigated by D1/A2's own seen-events rewrite (backfill
-                    # off by default, and the master marker recorded below is
-                    # recognized here via `known_uids` from the first poll after
-                    # this shipped) -- what remains is a series with a gap
-                    # between instances exceeding `SEEN_PRUNE_AGE` (~1 year)
-                    # while opt-in backfill is enabled, where its master could
-                    # be patched once more after the gap.
+                    # Known limitation: an existing sparse series whose prior
+                    # instance lies outside this search window has no visible
+                    # sibling to associate with its stored instance id. Mostly
+                    # mitigated by the seen-events baseline (backfill off by
+                    # default, and the master marker recorded below is
+                    # recognized here via `known_uids` from the first poll
+                    # after this shipped) -- what remains is a series with a
+                    # gap between instances exceeding `SEEN_PRUNE_AGE` (~1
+                    # year) while opt-in backfill is enabled, where its master
+                    # could be patched once more after the gap.
                     if master_id in known_uids or sibling_known:
                         # The series (master or some sibling instance) is
-                        # already known -- a daily "nachrueckende" instance
+                        # already known -- a newly-appearing daily instance
                         # must never re-trigger the master lookup/patch.
                         continue
                     if master_id in series_reminder_checked:
@@ -816,7 +816,7 @@ class GoogleCalendarTarget:
                 or updates.all_day is not None
                 or updates.reminders is not None
                 # An rrule addition may need to backfill a missing timeZone
-                # (Paket C) -- `_update_body` decides using `current`.
+                # -- `_update_body` decides using `current`.
                 or updates.rrule is not None
             )
             # Reuse the item already fetched while resolving the event/

@@ -113,7 +113,7 @@ def _log_poll_outcome(
     ok: bool,
     exc_info: bool = False,
 ) -> None:
-    """Log a poll's reachability outcome for one calendar, throttled (R5-07).
+    """Log a poll's reachability outcome for one calendar, throttled.
 
     `reachable_state` is a plain in-memory dict (never persisted -- a
     restart starting "reachable" again is correct, not a bug) keyed by
@@ -341,7 +341,7 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
 
     hass.bus.async_listen(EVENT_CALL_SERVICE, _async_backfill_reminder)
 
-    # R4-08: `async_track_time_interval` schedules its *next* fire before
+    # `async_track_time_interval` schedules its *next* fire before
     # ever starting the current one, as a background job nothing awaits
     # (`helpers/event.py`'s `_TrackTimeInterval._interval_listener`) -- a
     # poll that takes longer than `_POLL_INTERVAL` (a slow CalDAV/Google
@@ -354,9 +354,8 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     # flag, not an `asyncio.Lock`, is deliberate -- an overlapping run must
     # be skipped outright, never queued to run right after the first.
     poll_in_progress = False
-    # R5-07/log-when-unavailable: per-calendar reachability, in memory only
-    # (a restart starting "reachable" again is correct, not a bug) -- see
-    # `_log_poll_outcome`.
+    # Per-calendar reachability, in memory only (a restart starting
+    # "reachable" again is correct, not a bug) -- see `_log_poll_outcome`.
     calendar_reachable: dict[str, bool] = {}
 
     async def _async_poll_for_new_events(_now: datetime) -> None:
@@ -451,16 +450,15 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
                     )
                     await seen_events.async_add(calendar_ref, {seen.uid for seen in found})
 
-                    # Paket A1: every real (non-marker) upcoming event gets a
-                    # calendar notification if the switch is on -- regardless of
+                    # Every real (non-marker) upcoming event gets a calendar
+                    # notification if the switch is on -- regardless of
                     # `is_first_poll` (that gate is specific to the native
                     # VALARM/Google reminder backfill above, which never should
                     # retroactively patch years of pre-existing events; a bounded
                     # 48h-ahead notification isn't that flood). The scheduler's
-                    # own reconciliation (decision D) handles matching against
-                    # already-planned entries, the 48h window, explicit
-                    # `create_event(notify)` precedence, and removing anything
-                    # that no longer belongs.
+                    # own reconciliation handles matching against already-planned
+                    # entries, the 48h window, explicit `create_event(notify)`
+                    # precedence, and removing anything that no longer belongs.
                     await scheduler.async_reconcile_calendar(
                         entry.entry_id,
                         subentry.subentry_id,
@@ -552,13 +550,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: CalendarBridgeConfigEntr
 async def _async_handle_entry_updated(
     hass: HomeAssistant, entry: CalendarBridgeConfigEntry
 ) -> None:
-    """Immediately drop notifications a config/subentry change just invalidated (R4-02).
+    """Immediately drop notifications a config/subentry change just invalidated.
 
     Fires for *any* entry/subentry change (HA gives no "what changed"
     diff) -- a subentry no longer present was removed; one still present
     but with its notify switch off gets only its calendar-sourced entries
     purged (an explicit `create_event(notify)` reminder is independent of
-    the switch). A vorlauf/target/template change alone is deliberately
+    the switch). A lead-time/target/template change alone is deliberately
     left alone here -- the next poll's reconciliation already picks it up.
     """
     scheduler: ReminderScheduler = hass.data[DOMAIN]["reminder_scheduler"]
@@ -580,7 +578,7 @@ async def _async_handle_entry_updated(
 async def async_unload_entry(hass: HomeAssistant, entry: CalendarBridgeConfigEntry) -> bool:
     """Unload a config entry.
 
-    A1-05: unsubscribe the scheduler's in-memory timers only once the
+    Unsubscribe the scheduler's in-memory timers only once the
     platform unload has actually succeeded. `async_unload_platforms`
     returning `False` leaves the entry in `FAILED_UNLOAD` -- still present,
     still polled -- but the store entries survive either way; stripping
@@ -596,10 +594,10 @@ async def async_unload_entry(hass: HomeAssistant, entry: CalendarBridgeConfigEnt
 
 
 async def async_remove_entry(hass: HomeAssistant, entry: CalendarBridgeConfigEntry) -> None:
-    """Delete this entry's reminders (R6-03); delete the whole store if it was the last entry.
+    """Delete this entry's reminders; delete the whole store if it was the last entry.
 
     Also drops (or, if this was the last entry, wholly deletes) the
-    seen-events store (R4-07) -- `entry` is already gone from
+    seen-events store -- `entry` is already gone from
     `hass.config_entries.async_entries(DOMAIN)` by the time this runs, so
     `_live_calendar_refs_if_ready` naturally excludes its calendars.
     """

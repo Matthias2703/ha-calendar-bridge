@@ -66,10 +66,10 @@ class SeenEvent:
     series_uid: str
     # True only for a synthetic, non-real baseline marker that must never
     # itself trigger a notification: a recurring series' master-id entry
-    # (both backends, so a future instance "nachrueckt" without silently
-    # bypassing the known-uids baseline check via the master). A CalDAV
+    # (both backends, so a future instance newly appearing doesn't silently
+    # bypass the known-uids baseline check via the master). A CalDAV
     # series instance being migrated from the old bare-UID baseline to
-    # per-instance keys is a *real* event and must NOT set this -- Paket A1
+    # per-instance keys is a *real* event and must NOT set this -- it still
     # notifies for it like any other real, currently-upcoming event.
     is_marker: bool = False
 
@@ -227,7 +227,7 @@ def series_instance_key(uid: str, recurrence_id: datetime | date) -> str:
 
 
 def event_has_started(start: datetime | date, now: datetime) -> bool:
-    """Whether `start` is at or before `now` -- used for Paket A1's "missed fire time" rule.
+    """Whether `start` is at or before `now` -- used for the "missed fire time" rule.
 
     A timed `start` compares as an instant (`now` must itself be tz-aware,
     e.g. `dt_util.utcnow()`). An all-day `start` compares by calendar date in

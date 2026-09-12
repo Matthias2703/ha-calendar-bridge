@@ -166,7 +166,7 @@ def _default_reminders(subentry_data: Mapping[str, Any]) -> tuple[ReminderSpec, 
 
 
 def _ensure_end_after_start(all_day: bool | None, start: Any, end: Any) -> None:
-    """Reject end <= start for a timed event (R5-01).
+    """Reject end <= start for a timed event.
 
     Both backends otherwise silently rewrite it deep inside their own write
     path (gcal_sync replaces it with start + 30 minutes) -- the action would
@@ -183,7 +183,7 @@ def _ensure_end_after_start(all_day: bool | None, start: Any, end: Any) -> None:
 
 
 def _validate_rrule(rrule: str | None) -> None:
-    """Reject an unparseable rrule up front, without repairing it (R5-04).
+    """Reject an unparseable rrule up front, without repairing it.
 
     Parses it exactly the way `caldav_target.py` eventually would
     (`icalendar.vRecur.from_ical`) -- a falsy `rrule` (None, or "" which
@@ -263,8 +263,8 @@ async def async_handle_create_event(hass: HomeAssistant, call: ServiceCall) -> S
             ) from err
         except (CalDavAuthError, CalDavConnectionError, ApiException) as err:
             # A communication/backend failure, not a mistake in this call's
-            # own arguments -- HomeAssistantError, not ServiceValidationError
-            # (R5-05), so the normal stack trace/log entry isn't suppressed.
+            # own arguments -- HomeAssistantError, not ServiceValidationError,
+            # so the normal stack trace/log entry isn't suppressed.
             raise HomeAssistantError(
                 translation_domain=DOMAIN,
                 translation_key="calendar_unavailable",
@@ -286,7 +286,7 @@ def _ensure_entry_loaded(entry: ConfigEntry, device_id: str) -> None:
     A device stays in the device registry across an unload/reload/setup
     failure -- `async_resolve_device` alone can't tell a genuinely-gone
     device apart from one whose entry just isn't loaded right now. HA
-    deletes `entry.runtime_data` entirely on unload (R5-02), so every
+    deletes `entry.runtime_data` entirely on unload, so every
     caller must check this *before* dereferencing it, or get a raw
     AttributeError instead of a clean, user-facing message.
     """

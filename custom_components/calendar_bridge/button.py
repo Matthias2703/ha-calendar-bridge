@@ -40,7 +40,7 @@ class CalendarBridgeTestNotifyButton(ButtonEntity):
     _attr_translation_key = "test_notify"
     _attr_should_poll = False
     # An on-demand verification action, not a value the user configures --
-    # matches HA's own convention for e.g. "identify" buttons (R5-08).
+    # matches HA's own convention for e.g. "identify" buttons.
     _attr_entity_category = EntityCategory.DIAGNOSTIC
 
     def __init__(self, entry: ConfigEntry, subentry_id: str) -> None:

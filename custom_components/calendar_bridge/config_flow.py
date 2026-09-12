@@ -479,7 +479,7 @@ class CalendarSubentryFlow(ConfigSubentryFlow):
                 except CalDavAuthError:
                     # Rejected credentials -- the account's own reauth flow
                     # is the right place to fix this, not a half-finished
-                    # "add calendar" dialog (R5-03).
+                    # "add calendar" dialog.
                     entry.async_start_reauth(self.hass)
                     return self.async_abort(reason="invalid_auth")
                 except CalDavConnectionError:
