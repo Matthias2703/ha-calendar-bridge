@@ -45,6 +45,7 @@ from .target import (
     effective_reminder_minutes,
     event_starts_match,
     occurrence_matches,
+    resolve_subentry_title,
     series_instance_key,
 )
 
@@ -350,8 +351,17 @@ def _update_body(updates: EventUpdate, current: GoogleEvent | None) -> dict[str,
 class GoogleCalendarTarget:
     """Creates and backfills events on a Google Calendar via `gcal_sync`."""
 
-    def __init__(self, hass: HomeAssistant, google_entry_id: str) -> None:
+    def __init__(self, hass: HomeAssistant, entry_id: str, google_entry_id: str) -> None:
+        """Set up the target.
+
+        `entry_id` is this Google account's own calendar_bridge config
+        entry (used to resolve a subentry's display title for safe
+        logging, see `target.resolve_subentry_title`) -- distinct from
+        `google_entry_id`, the *foreign* core `google` integration's entry
+        this account borrows its OAuth session from.
+        """
         self._hass = hass
+        self._entry_id = entry_id
         self._google_entry_id = google_entry_id
 
     async def _async_service(self) -> tuple[GoogleCalendarService, AbstractAuth]:
@@ -441,7 +451,8 @@ class GoogleCalendarTarget:
             _LOGGER.info("Backfilled a %s reminder onto '%s'", method, summary)
             return True
         except ApiException:
-            _LOGGER.warning("Could not reach %s to check for a matching event", calendar_ref)
+            label = resolve_subentry_title(self._hass, self._entry_id, calendar_ref)
+            _LOGGER.warning("Could not reach %s to check for a matching event", label)
             return False
 
     async def async_backfill_new_events(
@@ -616,7 +627,8 @@ class GoogleCalendarTarget:
                     "Backfilled a %s reminder onto '%s' (poll)", method, target_event.summary
                 )
         except ApiException:
-            _LOGGER.warning("Could not reach %s to poll for new events", calendar_ref)
+            label = resolve_subentry_title(self._hass, self._entry_id, calendar_ref)
+            _LOGGER.warning("Could not reach %s to poll for new events", label)
             return None
         return seen
 
@@ -764,7 +776,8 @@ class GoogleCalendarTarget:
                 return False
             await service.async_delete_event(calendar_ref, cast(str, item["id"]))
         except ApiException:
-            _LOGGER.warning("Could not delete event %s on %s", uid, calendar_ref, exc_info=True)
+            label = resolve_subentry_title(self._hass, self._entry_id, calendar_ref)
+            _LOGGER.warning("Could not delete event %s on %s", uid, label, exc_info=True)
             return False
         return True
 
@@ -800,6 +813,7 @@ class GoogleCalendarTarget:
             body = _update_body(updates, current)
             await service.async_patch_event(calendar_ref, cast(str, item["id"]), body)
         except ApiException:
-            _LOGGER.warning("Could not update event %s on %s", uid, calendar_ref, exc_info=True)
+            label = resolve_subentry_title(self._hass, self._entry_id, calendar_ref)
+            _LOGGER.warning("Could not update event %s on %s", uid, label, exc_info=True)
             return False
         return True
