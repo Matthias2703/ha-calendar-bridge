@@ -21,6 +21,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.util import dt as dt_util
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
+import custom_components.calendar_bridge as calendar_bridge
 from custom_components.calendar_bridge.const import (
     CONF_CALENDAR_URL,
     CONF_DEFAULT_REMINDER_METHOD,
@@ -314,3 +315,35 @@ async def test_all_day_notification_survives_dst_spring_forward(europe_berlin_ti
     )
 
     assert dt_util.parse_datetime(reminder["fire_at"]) == datetime(2026, 3, 28, 8, 0, tzinfo=UTC)
+
+
+# --- frontend card auto-registration ---
+
+
+@pytest.mark.asyncio
+async def test_register_frontend_cards_is_a_noop_when_http_is_not_loaded() -> None:
+    # The test hass fixture (and any headless setup without http/frontend)
+    # never loads the http component -- hass.http stays None. There's no
+    # dashboard to serve the card to either way, so this must be skipped
+    # cleanly rather than raising.
+    hass = MagicMock()
+    hass.http = None
+
+    await calendar_bridge._async_register_frontend_cards(hass)  # must not raise
+
+
+@pytest.mark.asyncio
+async def test_register_frontend_cards_registers_the_static_path_and_extra_js_url() -> None:
+    hass = MagicMock()
+    hass.http.async_register_static_paths = AsyncMock()
+
+    with patch("custom_components.calendar_bridge.add_extra_js_url") as mock_add_js:
+        await calendar_bridge._async_register_frontend_cards(hass)
+
+    hass.http.async_register_static_paths.assert_awaited_once()
+    (configs,), _kwargs = hass.http.async_register_static_paths.call_args
+    assert len(configs) == 1
+    assert configs[0].url_path == "/calendar_bridge/calendar-bridge-cards.js"
+    assert configs[0].path.endswith("calendar-bridge-cards.js")
+
+    mock_add_js.assert_called_once_with(hass, "/calendar_bridge/calendar-bridge-cards.js")

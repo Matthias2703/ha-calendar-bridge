@@ -5,8 +5,11 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import date, datetime, timedelta
+from pathlib import Path
 from typing import Any
 
+from homeassistant.components.frontend import add_extra_js_url
+from homeassistant.components.http import StaticPathConfig
 from homeassistant.config_entries import ConfigEntry, ConfigEntryState
 from homeassistant.const import (
     ATTR_DOMAIN,
@@ -86,6 +89,9 @@ _BACKFILL_RETRY_DELAYS = (3, 5, 10, 15, 15)
 # through any HA event or service call.
 _POLL_INTERVAL = timedelta(seconds=60)
 _POLL_LOOKAHEAD = timedelta(days=365)
+
+_FRONTEND_JS_FILENAME = "calendar-bridge-cards.js"
+_FRONTEND_JS_URL = f"/{DOMAIN}/{_FRONTEND_JS_FILENAME}"
 
 PLATFORMS: list[Platform] = [Platform.SWITCH, Platform.NUMBER, Platform.BUTTON]
 
@@ -444,7 +450,31 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
             poll_in_progress = False
 
     async_track_time_interval(hass, _async_poll_for_new_events, _POLL_INTERVAL)
+    await _async_register_frontend_cards(hass)
     return True
+
+
+async def _async_register_frontend_cards(hass: HomeAssistant) -> None:
+    """Serve and auto-load the bundled "create event" Lovelace cards.
+
+    `add_extra_js_url` makes the module available on every dashboard
+    automatically -- no manual Lovelace resource to add, so the cards are
+    genuinely part of the integration rather than a separate HACS frontend
+    package. Registered once per HA run (`add_extra_js_url`'s own dedup);
+    `async_setup` itself only ever runs once regardless. `hass.http` is
+    `None` when the `http`/`frontend` components aren't loaded (a headless
+    setup, or this integration's own test suite, which never pulls in
+    `http`) -- there's no dashboard to serve the card to either way, so
+    this is skipped rather than treated as a setup failure.
+    """
+    if hass.http is None:
+        _LOGGER.debug("Skipping frontend card registration -- http/frontend isn't loaded")
+        return
+    js_path = Path(__file__).parent / "www" / _FRONTEND_JS_FILENAME
+    await hass.http.async_register_static_paths(
+        [StaticPathConfig(_FRONTEND_JS_URL, str(js_path), cache_headers=False)]
+    )
+    add_extra_js_url(hass, _FRONTEND_JS_URL)
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: CalendarBridgeConfigEntry) -> bool:
