@@ -6,7 +6,13 @@
 [![hacs_badge](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://github.com/hacs/integration)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-A Home Assistant custom integration that creates calendar events with **real reminders and recurrence** — directly in Google Calendar or a CalDAV calendar (e.g. iCloud), so the alert shows up natively on your phone/iOS/Google Calendar, not just as a Home Assistant notification.
+<!-- TODO: screenshot or short GIF of the two Lovelace "Create event" cards goes here -->
+
+Calendar Bridge fills a gap in Home Assistant's calendar service: create Google Calendar and CalDAV/iCloud events with native reminders and recurrence, directly from Home Assistant.
+
+- **Native reminders** — a real popup/email alarm on the event itself, shown by Google/iOS/your calendar app, not just an HA notification
+- **Recurring events** — full RRULE support, including editing or deleting a single occurrence of a series
+- **Google Calendar + CalDAV/iCloud** — reuses your existing account, no new entities or duplicated calendars
 
 ## Why
 
