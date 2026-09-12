@@ -3,7 +3,7 @@
 An alternative (or addition) to the calendar's own VALARM/reminders.overrides:
 `create_event` can ask for a plain Home Assistant notification to be sent at
 a given point before the event, and every configured calendar can
-independently notify for all of its own upcoming events (Paket A1). Both need
+independently notify for all of its own upcoming events. Both need
 actual scheduling and, unlike the rest of this integration, state that
 survives a Home Assistant restart -- hence the `Store`-backed queue here
 instead of a plain `async_call_later`.
@@ -45,7 +45,7 @@ _LOGGER = logging.getLogger(__name__)
 
 
 class _Claim(NamedTuple):
-    """A delivery's own immutable snapshot of what it claimed to send (G6/A1D-03).
+    """A delivery's own immutable snapshot of what it claimed to send.
 
     `_deliver` reads only from this, never from the shared, mutable
     `reminder` dict it also holds a reference to -- a reconciliation landing
@@ -66,21 +66,21 @@ class _Claim(NamedTuple):
 _STORAGE_VERSION = 2
 _STORAGE_KEY = f"{DOMAIN}_reminders"
 
-# Decision 2: a calendar-sourced notification is only ever stored/scheduled
+# A calendar-sourced notification is only ever stored/scheduled
 # once its fire time is within this window of "now" -- every poll
 # re-evaluates, so an event further out simply isn't planned *yet*. An
 # explicit (create_event notify) entry is exempt -- it's scheduled
 # immediately regardless of how far away its own fire time is.
 PLANNING_WINDOW = timedelta(hours=48)
 
-# Decision 8b: how long a no-longer-relevant entry (sent, or past its event's
+# How long a no-longer-relevant entry (sent, or past its event's
 # start without ever being sendable) lingers before being pruned -- wider
-# than "the event has started" so a same-poll instance-key change (8a, e.g.
+# than "the event has started" so a same-poll instance-key change (e.g.
 # a single event turning into a series) can still find and carry over its
 # `sent` marker before the old entry disappears for good.
 _PRUNE_AGE = timedelta(days=1)
 
-# R4-05: give up after this many failed/blocked send attempts for the same
+# Give up after this many failed/blocked send attempts for the same
 # entry, rather than retrying forever. There is no separate retry timer --
 # a failed attempt simply leaves the entry due (`fire_at` unchanged, already
 # in the past); the next periodic poll's reconciliation (~60s later, the
@@ -88,9 +88,9 @@ _PRUNE_AGE = timedelta(days=1)
 # same "overdue, event not started" path, up to this cap.
 MAX_SEND_ATTEMPTS = 3
 
-# G3/A1D-02: how long to wait before retrying a failed send via its own
-# dedicated timer (`_record_failed_attempt`). Relying solely on "the next
-# periodic poll finds `fire_at` still due" (the pre-G3 behavior) never
+# How long to wait before retrying a failed send via its own dedicated
+# timer (`_record_failed_attempt`). Relying solely on "the next
+# periodic poll finds `fire_at` still due" (the previous behavior) never
 # actually retries a calendar-sourced entry outside its own PLANNING_WINDOW,
 # an explicit entry far outside the poll's own lookahead, or any entry when
 # the poll itself fails for unrelated reasons (a backend error skips
@@ -114,8 +114,8 @@ class _ReminderStore(Store[dict[str, Any]]):
         notification is simply replanned by the next poll; an explicit
         `create_event(notify)` reminder from before this update is lost --
         documented in README.md. Logs only a count, never the discarded
-        entries' `target`/`message` (R6-03 already flags reminder content as
-        sensitive; a migration log must not repeat that mistake).
+        entries' `target`/`message` -- reminder content is already treated
+        as sensitive elsewhere; a migration log must not repeat that mistake.
         """
         discarded = len(old_data.get("reminders", []))
         if discarded:
@@ -208,16 +208,16 @@ class ReminderScheduler:
         # so a timer firing at the same moment a poll reconciles the same
         # entry can never both claim it for delivery. The stored revision
         # lets a stale claim (the entry moved on while this one was in
-        # flight -- F1) recognize itself as stale instead of writing back
-        # against a since-superseded fire_at/event_start; the stored target/
-        # message (G6/A1D-03) let `_deliver` send using exactly what was
-        # current at claim time, never whatever a since-landed change left
-        # behind in the shared, mutable reminder dict.
+        # flight) recognize itself as stale instead of writing back against
+        # a since-superseded fire_at/event_start; the stored target/message
+        # let `_deliver` send using exactly what was current at claim time,
+        # never whatever a since-landed change left behind in the shared,
+        # mutable reminder dict.
         self._sending: dict[str, _Claim] = {}
         # (cancel callback, owning config entry id) per reminder id with an
         # already-registered `async_at_started` callback -- same shape as
-        # `_unsub`, since `async_at_started` does return a `CALLBACK_TYPE`
-        # (A1-04). Lets `_ensure_live_schedule` stay idempotent when called
+        # `_unsub`, since `async_at_started` does return a `CALLBACK_TYPE`.
+        # Lets `_ensure_live_schedule` stay idempotent when called
         # more than once for the same reminder (once from `async_load` at HA
         # startup, again from `async_resume_entry` when a config entry
         # reloads), so it never registers a duplicate -- and lets an unload/
@@ -321,7 +321,7 @@ class ReminderScheduler:
 
     def _async_send_when_started(self, reminder: dict[str, Any]) -> None:
         reminder_id = reminder["id"]
-        # Same staleness risk as `_schedule`'s timer (F1/A1-01): HA can take
+        # Same staleness risk as `_schedule`'s timer: HA can take
         # a while to finish starting, during which a poll may have already
         # changed this entry.
         scheduled_revision = reminder.get("revision", 0)
@@ -333,7 +333,7 @@ class ReminderScheduler:
             if claimed is not None:
                 self._spawn_delivery(claimed)
 
-        # G2/R2: if HA is already running, `async_at_started` (HA 2026.3.4
+        # If HA is already running, `async_at_started` (HA 2026.3.4
         # helpers/start.py, eager coroutine jobs per core.py) runs `_send`
         # immediately, *before* returning here -- `_send` then pops
         # `reminder_id` from `_pending_send_when_started` before this method
@@ -363,7 +363,7 @@ class ReminderScheduler:
         Returns as soon as the reminder is planned -- a due one is claimed
         and handed to `_deliver` as a background task, not awaited here, so
         a slow or hanging `notify` integration never delays the
-        `create_event` service call itself (N5).
+        `create_event` service call itself.
         """
         claimed: dict[str, Any] | None = None
         async with self._lock:
@@ -405,7 +405,7 @@ class ReminderScheduler:
     ) -> None:
         """Reconcile one calendar's desired vs. planned notifications for one poll.
 
-        `real_events` must already exclude marker `SeenEvent`s (decision C).
+        `real_events` must already exclude marker `SeenEvent`s.
         `render_message` is `target.render_notify_message` (passed in rather
         than imported, purely to keep this module's import list focused --
         it is always that function in production).
@@ -415,7 +415,7 @@ class ReminderScheduler:
         is claimed (`_sending`) and handed to `_deliver` as a background
         task after the lock is released, so a slow or hanging `notify`
         integration for one entry never stalls this or any other
-        calendar's reconciliation (N5).
+        calendar's reconciliation.
         """
         to_deliver: list[dict[str, Any]] = []
         async with self._lock:
@@ -502,7 +502,7 @@ class ReminderScheduler:
         for entry in explicit_entries:
             ev = real_by_key.get(entry["instance_key"])
             if ev is None:
-                # A1-03: the event may still be real, just now surfacing
+                # The event may still be real, just now surfacing
                 # under a different instance_key shape (a single event
                 # recognized as (the first instance of) a series, or the
                 # reverse) -- re-key onto it instead of treating the entry
@@ -516,22 +516,21 @@ class ReminderScheduler:
                     claimed_keys.add(rekeyed.instance_key)
                     ev = rekeyed
             if ev is None:
-                # Decision 2: only treat "missing from this poll" as
-                # "deleted" when the entry's own event_start actually falls
-                # inside what this poll covers -- otherwise (e.g. an event
-                # far beyond the poll's lookahead) "missing" just means
-                # "out of range for this particular poll", not gone.
+                # Only treat "missing from this poll" as "deleted" when the
+                # entry's own event_start actually falls inside what this
+                # poll covers -- otherwise (e.g. an event far beyond the
+                # poll's lookahead) "missing" just means "out of range for
+                # this particular poll", not gone.
                 #
-                # A1-06 (known limitation, not fixed here): `in_window` below
-                # is judged against this entry's own *stored* event_start,
-                # not a confirmed deletion -- the backend is never asked
-                # whether the event still exists before discarding. If the
-                # event was instead moved to beyond the poll's window, this
-                # entry is indistinguishable from a real deletion and its
-                # explicit notification is lost. A real fix needs the
-                # backend to resolve this entry's own id before discarding
-                # it (or to report the exact bounds it actually queried);
-                # planned for Paket F.
+                # Known limitation, not fixed here: `in_window` below is
+                # judged against this entry's own *stored* event_start, not
+                # a confirmed deletion -- the backend is never asked whether
+                # the event still exists before discarding. If the event was
+                # instead moved to beyond the poll's window, this entry is
+                # indistinguishable from a real deletion and its explicit
+                # notification is lost. A real fix needs the backend to
+                # resolve this entry's own id before discarding it (or to
+                # report the exact bounds it actually queried).
                 try:
                     event_start = _parse_event_start(entry["event_start"])
                 except ValueError:
@@ -570,7 +569,7 @@ class ReminderScheduler:
         real_by_key: dict[str, SeenEvent],
         claimed_keys: set[str],
     ) -> SeenEvent | None:
-        """A1-03/G4 (A1D-01): find the one real event this now-keyless explicit entry actually is.
+        """Find the one real event this now-keyless explicit entry actually is.
 
         Matches by stable per-occurrence *identity* -- `series_uid` plus the
         entry's own original RECURRENCE-ID/originalStartTime -- rather than
@@ -730,7 +729,7 @@ class ReminderScheduler:
             if sent:
                 continue
             if migrated and fire_at <= now:
-                # Decision 7: the very first reconciliation after a v1->v2
+                # The very first reconciliation after a v1->v2
                 # migration must not (re-)send anything v1 may already have
                 # delivered -- silently adopt "already sent" instead.
                 reminder["sent"] = True
@@ -745,8 +744,8 @@ class ReminderScheduler:
     def _schedule(self, reminder: dict[str, Any], fire_at: datetime) -> None:
         # Captured now, at scheduling time -- if a poll changes this same
         # entry (moves it, retargets it) before this timer fires, its
-        # `revision` moves on too, and this closure's own copy goes stale
-        # (F1/A1-01). A timer that already fired and is merely waiting on
+        # `revision` moves on too, and this closure's own copy goes stale.
+        # A timer that already fired and is merely waiting on
         # `self._lock` while that happens must not then deliver against the
         # entry's now-superseded fire_at/event_start once it finally gets in.
         scheduled_revision = reminder.get("revision", 0)
@@ -766,7 +765,7 @@ class ReminderScheduler:
             unsub_entry[0]()
 
     def _cancel_pending_start_callback(self, reminder_id: str) -> None:
-        """Cancel a not-yet-fired `async_at_started` callback (A1-04), if any."""
+        """Cancel a not-yet-fired `async_at_started` callback, if any."""
         pending = self._pending_send_when_started.pop(reminder_id, None)
         if pending is not None:
             pending[0]()
@@ -785,7 +784,7 @@ class ReminderScheduler:
         `notify` itself: a due entry is marked `_sending` here and returned
         (non-None) so the caller can hand it to `_deliver` as a background
         task once its own locked section ends, keeping the potentially
-        unbounded `notify` call fully outside the lock (N5/N3).
+        unbounded `notify` call fully outside the lock.
         """
         if reminder.get("sent"):
             return None
@@ -832,7 +831,7 @@ class ReminderScheduler:
         self, reminder: dict[str, Any], expected_revision: int
     ) -> dict[str, Any] | None:
         """A timer's own claim: only if nothing has changed this entry since
-        it was scheduled (F1/A1-01) -- otherwise fall back to reclaiming the
+        it was scheduled -- otherwise fall back to reclaiming the
         entry's *current* state, but only if it's independently due right
         now; a timer that fired against a since-superseded fire_at must
         never deliver on that stale basis.
@@ -847,7 +846,7 @@ class ReminderScheduler:
         """Claim `reminder`'s *current* state for a fresh delivery, but only if
         it's due right now and nothing else already owns it (no live timer,
         no `async_at_started` callback, not already claimed) -- used after
-        recognizing a stale claim (F1/A1-01, A1-02) so a genuinely-due entry
+        recognizing a stale claim so a genuinely-due entry
         isn't left stranded, while one that isn't due (or already has its
         own timer/callback) is simply left to that timer or the next poll.
         """
@@ -884,7 +883,7 @@ class ReminderScheduler:
         potentially unbounded duration -- every other calendar's
         reconciliation and every explicit `create_event(notify)` call would
         otherwise stall behind whichever single notify integration happens
-        to be slow or hanging (N5/N3). `self._lock` is only ever touched via
+        to be slow or hanging. `self._lock` is only ever touched via
         `async with` here, so a cancelled delivery task can never leave the
         lock held by nobody or corrupt another task's acquire/release
         balance.
@@ -892,7 +891,7 @@ class ReminderScheduler:
         Never reads `reminder["target"]`/`reminder["message"]`/
         `reminder["revision"]` directly -- only `claim`, an immutable
         snapshot that can't have been mutated in place by a reconciliation
-        that ran since this was claimed (G6/A1D-03). Before ever calling
+        that ran since this was claimed. Before ever calling
         notify, synchronously re-checks the entry's *current* revision
         against `claim.revision`: not reachable in production today (a real
         background task starts eager, so no scheduling gap exists between
@@ -901,7 +900,7 @@ class ReminderScheduler:
         whatever's now in the shared dict, and the reclaim below would
         *also* redeliver -- two real sends for one due entry. A revision
         change *during* the notify call itself is a separate, real race
-        (F1/A1-02) still handled by `_finish_delivery` below regardless.
+        still handled by `_finish_delivery` below regardless.
         """
         reminder_id = reminder["id"]
         redo: dict[str, Any] | None = None
@@ -932,8 +931,8 @@ class ReminderScheduler:
                         send_ok = True
                     redo = await self._finish_delivery(reminder_id, claim, send_ok=send_ok)
         finally:
-            # Usually a no-op: `_finish_delivery`'s stale-revision path (G1/
-            # R1) already released this exact claim itself before reclaiming
+            # Usually a no-op: `_finish_delivery`'s stale-revision path
+            # already released this exact claim itself before reclaiming
             # -- clearing here again only matters if this claim was never
             # even passed to `_finish_delivery` (the pre-check above already
             # found it stale, or the entry was discarded outright). Guarded
@@ -950,7 +949,7 @@ class ReminderScheduler:
         """Write back one delivery's outcome under the lock.
 
         If the entry has moved on to a new revision since it was claimed
-        (F1/A1-02 -- a poll changed its event_start/fire_at/target/message/
+        (a poll changed its event_start/fire_at/target/message/
         minutes_before while the notify call above was in flight), nothing
         about this stale attempt is recorded (not `sent`, not `attempts`,
         no unschedule) -- the entry's *current* state is reclaimed for a
@@ -965,7 +964,7 @@ class ReminderScheduler:
                 return None
             current = next(r for r in self._data["reminders"] if r["id"] == reminder_id)
             if current.get("revision", 0) != claim.revision:
-                # G1/R1: release this stale attempt's own claim *before*
+                # Release this stale attempt's own claim *before*
                 # trying to reclaim -- `_claim_for_delivery` refuses an id
                 # already in `_sending`, so the reclaim below would
                 # otherwise always find itself still "owning" this entry and
@@ -991,10 +990,10 @@ class ReminderScheduler:
             )
             self._discard(reminder)
         else:
-            # G3/A1D-02: a dedicated retry timer, bound to this entry's
-            # current revision exactly like any other scheduled delivery
-            # (F1/A1-01) -- a poll that changes the entry in the meantime
-            # supersedes it the same way. Registered in `self._unsub`, so it
+            # A dedicated retry timer, bound to this entry's current
+            # revision exactly like any other scheduled delivery -- a poll
+            # that changes the entry in the meantime supersedes it the same
+            # way. Registered in `self._unsub`, so it
             # composes for free with unload/purge/discard already cancelling
             # anything found there, and with reconciliation's own "not
             # already scheduled" checks (`entry["id"] not in self._unsub`)
@@ -1013,7 +1012,7 @@ class ReminderScheduler:
     def async_unsub_entry(self, entry_id: str) -> None:
         """Cancel this entry's in-memory timers and pending start-callbacks (unload).
 
-        A1-04: a not-yet-fired `async_at_started` callback for a reminder of
+        A not-yet-fired `async_at_started` callback for a reminder of
         this entry must be cancelled too -- otherwise it stays registered
         past the unload and, if HA finishes starting (or an already-running
         HA fires the event) before this entry is set up again, delivers
@@ -1032,7 +1031,7 @@ class ReminderScheduler:
             self._cancel_pending_start_callback(reminder_id)
 
     async def async_remove_entry_data(self, entry_id: str) -> None:
-        """Delete this entry's reminders (removal, R6-03) and cancel their timers."""
+        """Delete this entry's reminders and cancel their timers."""
         async with self._lock:
             self.async_unsub_entry(entry_id)
             remaining = [r for r in self._data["reminders"] if r["entry_id"] != entry_id]
@@ -1041,7 +1040,7 @@ class ReminderScheduler:
                 await self._store.async_save(self._data)
 
     async def async_remove_store(self) -> None:
-        """Delete the whole store file (called once no config entry is left, R6-03)."""
+        """Delete the whole store file (called once no config entry is left)."""
         await self._store.async_remove()
 
     async def async_purge_subentry(

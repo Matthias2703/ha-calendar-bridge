@@ -396,20 +396,19 @@ class CalDavCalendarTarget:
 
         `date_search()` client-side expands a recurring master into several
         VEVENT components inside one returned resource, each carrying its
-        own RECURRENCE-ID (see the B1 plan) -- every one of them becomes its
-        own `SeenEvent`, keyed via `series_instance_key` so a whole series
-        doesn't collapse into a single notification (R3-04). The native
-        VALARM, however, is still only ever backfilled onto the series'
-        real master (re-fetched via `event_by_uid`, same as before), at most
-        once per UID per poll.
+        own RECURRENCE-ID -- every one of them becomes its own `SeenEvent`,
+        keyed via `series_instance_key` so a whole series doesn't collapse
+        into a single notification. The native VALARM, however, is still
+        only ever backfilled onto the series' real master (re-fetched via
+        `event_by_uid`, same as before), at most once per UID per poll.
 
         A series whose old bare-UID baseline predates this per-instance
         keying (no persisted instance key of it known yet, but the UID itself
         is) migrates silently into the baseline without a backfill (still
-        gated by `series_already_known` below) -- but Paket A1 notifies for
-        its real, currently-upcoming instances like any other real event
-        (decision C: migrating is a backfill-only concept, never a reason to
-        withhold a notification).
+        gated by `series_already_known` below) -- but this still notifies for
+        its real, currently-upcoming instances like any other real event:
+        migrating is a backfill-only concept, never a reason to withhold a
+        notification.
         """
         client = build_client(self._url, self._username, self._password, self._verify_ssl)
         calendar = self._find_calendar(client, calendar_ref)
@@ -443,8 +442,8 @@ class CalDavCalendarTarget:
                 summary = str(component.get("summary", ""))
                 dtstart = component.get("dtstart")
                 start = dtstart.dt if dtstart is not None else now
-                # `key` already is the Paket A1 cross-backend instance
-                # identity (series_instance_key(uid, recurrence-id), or the
+                # `key` already is the cross-backend instance identity
+                # (series_instance_key(uid, recurrence-id), or the
                 # bare uid for a single event) -- no separate instance_key
                 # needed. Never a marker: every SeenEvent here corresponds
                 # to a real, returned VEVENT component.
@@ -658,7 +657,7 @@ class CalDavCalendarTarget:
            VEVENT (has RECURRENCE-ID) whose RECURRENCE-ID matches -- found
            independently of that exception's current (possibly moved)
            DTSTART, since a previously-moved occurrence must still be found
-           by its original slot (R3-05).
+           by its original slot.
         2. Otherwise, expand the series with `recurring_ical_events` (already
            a transitive dependency of `caldav`, via `icalendar`) and match
            each candidate's own RECURRENCE-ID -- never its current DTSTART.
@@ -859,7 +858,7 @@ class CalDavCalendarTarget:
     ) -> icalendar.Alarm:
         alarm = icalendar.Alarm()
         alarm.add("action", _ALARM_ACTION[method])
-        # Paket C, point 6 (documented, not changed here): icalendar's
+        # Known, deliberately-unfixed quirk: icalendar's
         # vDuration.to_ical() only emits a day designator ("-P1D") for a
         # duration with zero leftover seconds -- effective_reminder_minutes'
         # default 09:00 anchor almost never lands on one (e.g. 1 day before
