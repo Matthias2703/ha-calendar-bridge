@@ -6,10 +6,11 @@ from datetime import UTC, date, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from gcal_sync.exceptions import ApiException
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.const import ATTR_DEVICE_ID
 from homeassistant.core import Context, ServiceCall
-from homeassistant.exceptions import ServiceValidationError
+from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.util import dt as dt_util
 
 from custom_components.calendar_bridge.caldav_target import CalDavAuthError, CalDavConnectionError
@@ -25,7 +26,9 @@ from custom_components.calendar_bridge.const import (
     ATTR_SUMMARY,
     ATTR_UID,
     CONF_CALENDAR_URL,
+    CONF_DEFAULT_REMINDER_METHOD,
     DOMAIN,
+    REMINDER_METHOD_NONE,
 )
 from custom_components.calendar_bridge.reminder_scheduler import ReminderScheduler
 from custom_components.calendar_bridge.services import (
@@ -42,7 +45,14 @@ _CALENDAR_URL = "https://example.test/cal/"
 
 def _make_hass_and_entry(target: MagicMock) -> tuple[MagicMock, MagicMock]:
     subentry = MagicMock()
-    subentry.data = {CONF_CALENDAR_URL: _CALENDAR_URL}
+    subentry.data = {
+        CONF_CALENDAR_URL: _CALENDAR_URL,
+        # Only consulted by create_event when a call gives no explicit
+        # reminders/reminder_minutes of its own -- REMINDER_METHOD_NONE
+        # short-circuits _default_reminders to `()` without also needing a
+        # CONF_DEFAULT_REMINDER_MINUTES key here.
+        CONF_DEFAULT_REMINDER_METHOD: REMINDER_METHOD_NONE,
+    }
     entry = MagicMock()
     entry.subentries = {"sub1": subentry}
     entry.runtime_data = target
@@ -325,8 +335,15 @@ async def test_update_event_allows_all_day_change_with_both_start_and_end():
     assert result == {"updated": True}
 
 
+# --- R5-05: a communication/backend failure (unreachable server, rejected
+# credentials, a Google API error) is not the caller's fault -- HA reserves
+# ServiceValidationError for bad service-call arguments/targets and expects
+# HomeAssistantError for everything else, so create_event's own stack trace
+# isn't suppressed the way ServiceValidationError's is.
+
+
 @pytest.mark.asyncio
-async def test_create_event_raises_calendar_unavailable_on_connection_error():
+async def test_create_event_raises_homeassistant_error_on_connection_error():
     target = MagicMock()
     target.async_create_event = AsyncMock(side_effect=CalDavConnectionError())
     hass, entry = _make_hass_and_entry(target)
@@ -336,7 +353,7 @@ async def test_create_event_raises_calendar_unavailable_on_connection_error():
             "custom_components.calendar_bridge.services.async_resolve_device",
             return_value=(entry, "sub1"),
         ),
-        pytest.raises(ServiceValidationError),
+        pytest.raises(HomeAssistantError) as exc_info,
     ):
         await async_handle_create_event(
             hass,
@@ -351,9 +368,11 @@ async def test_create_event_raises_calendar_unavailable_on_connection_error():
             ),
         )
 
+    assert not isinstance(exc_info.value, ServiceValidationError)
+
 
 @pytest.mark.asyncio
-async def test_create_event_raises_calendar_unavailable_on_auth_error():
+async def test_create_event_raises_homeassistant_error_on_auth_error():
     # A rejected-credentials failure already triggers reauth (inside the
     # target); the service call itself must still fail cleanly, not with an
     # unhandled exception.
@@ -366,7 +385,7 @@ async def test_create_event_raises_calendar_unavailable_on_auth_error():
             "custom_components.calendar_bridge.services.async_resolve_device",
             return_value=(entry, "sub1"),
         ),
-        pytest.raises(ServiceValidationError),
+        pytest.raises(HomeAssistantError) as exc_info,
     ):
         await async_handle_create_event(
             hass,
@@ -380,6 +399,39 @@ async def test_create_event_raises_calendar_unavailable_on_auth_error():
                 }
             ),
         )
+
+    assert not isinstance(exc_info.value, ServiceValidationError)
+
+
+@pytest.mark.asyncio
+async def test_create_event_raises_homeassistant_error_on_google_api_exception():
+    # Previously not caught in services.py at all -- the raw ApiException
+    # propagated straight out of create_event.
+    target = MagicMock()
+    target.async_create_event = AsyncMock(side_effect=ApiException("boom"))
+    hass, entry = _make_hass_and_entry(target)
+
+    with (
+        patch(
+            "custom_components.calendar_bridge.services.async_resolve_device",
+            return_value=(entry, "sub1"),
+        ),
+        pytest.raises(HomeAssistantError) as exc_info,
+    ):
+        await async_handle_create_event(
+            hass,
+            _call(
+                {
+                    ATTR_DEVICE_ID: [_DEVICE_ID],
+                    ATTR_SUMMARY: "Test",
+                    ATTR_START: datetime(2026, 10, 1, 9, 0, tzinfo=UTC),
+                    ATTR_ALL_DAY: False,
+                    ATTR_REMINDER_MINUTES: 30,
+                }
+            ),
+        )
+
+    assert not isinstance(exc_info.value, ServiceValidationError)
 
 
 # --- R5-02: a device resolves fine (it stays in the device registry across an
@@ -525,3 +577,200 @@ async def test_create_event_notify_for_a_series_keys_by_uid_and_start():
         await _async_schedule_notification(hass, "entry-1", "sub-1", "uid-1", notify_data, spec)
 
     assert scheduler._data["reminders"][0]["instance_key"] == series_instance_key("uid-1", start)
+
+
+# --- R5-01: end <= start for a timed event must be rejected up front, not
+# silently rewritten deep inside a backend (gcal_sync replaces it with
+# start + 30 minutes; all_day_bounds' own end<=start correction is a
+# separate, intentional all-day shorthand -- explicitly out of scope here).
+
+
+@pytest.mark.asyncio
+async def test_create_event_rejects_end_before_start_for_a_timed_event():
+    target = MagicMock()
+    target.async_create_event = AsyncMock(return_value="uid-1")
+    hass, entry = _make_hass_and_entry(target)
+
+    with (
+        patch(
+            "custom_components.calendar_bridge.services.async_resolve_device",
+            return_value=(entry, "sub1"),
+        ),
+        pytest.raises(ServiceValidationError) as exc_info,
+    ):
+        await async_handle_create_event(
+            hass,
+            _call(
+                {
+                    ATTR_DEVICE_ID: [_DEVICE_ID],
+                    ATTR_SUMMARY: "Test",
+                    ATTR_START: datetime(2026, 10, 1, 10, 0, tzinfo=UTC),
+                    ATTR_END: datetime(2026, 10, 1, 9, 0, tzinfo=UTC),
+                    ATTR_ALL_DAY: False,
+                }
+            ),
+        )
+
+    assert exc_info.value.translation_key == "end_before_start"
+    target.async_create_event.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_create_event_allows_all_day_end_equal_to_start():
+    # The existing, intentional all_day_bounds shorthand (a single-day
+    # all-day event) must keep working -- only the timed path is validated.
+    target = MagicMock()
+    target.async_create_event = AsyncMock(return_value="uid-1")
+    hass, entry = _make_hass_and_entry(target)
+
+    with patch(
+        "custom_components.calendar_bridge.services.async_resolve_device",
+        return_value=(entry, "sub1"),
+    ):
+        result = await async_handle_create_event(
+            hass,
+            _call(
+                {
+                    ATTR_DEVICE_ID: [_DEVICE_ID],
+                    ATTR_SUMMARY: "Birthday",
+                    ATTR_START: datetime(2026, 10, 1, 0, 0),
+                    ATTR_END: datetime(2026, 10, 1, 0, 0),
+                    ATTR_ALL_DAY: True,
+                }
+            ),
+        )
+
+    assert result == {"created": {_DEVICE_ID: "uid-1"}}
+
+
+@pytest.mark.asyncio
+async def test_update_event_rejects_end_before_start_when_both_given():
+    target = MagicMock()
+    target.async_update_event = AsyncMock(return_value=True)
+    hass, entry = _make_hass_and_entry(target)
+
+    with (
+        patch(
+            "custom_components.calendar_bridge.services.async_resolve_device",
+            return_value=(entry, "sub1"),
+        ),
+        pytest.raises(ServiceValidationError) as exc_info,
+    ):
+        await async_handle_update_event(
+            hass,
+            _call(
+                {
+                    ATTR_DEVICE_ID: _DEVICE_ID,
+                    ATTR_UID: "uid-1",
+                    ATTR_START: datetime(2026, 10, 1, 10, 0, tzinfo=UTC),
+                    ATTR_END: datetime(2026, 10, 1, 9, 0, tzinfo=UTC),
+                }
+            ),
+        )
+
+    assert exc_info.value.translation_key == "end_before_start"
+    target.async_update_event.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_update_event_skips_the_end_before_start_check_for_all_day():
+    target = MagicMock()
+    target.async_update_event = AsyncMock(return_value=True)
+    hass, entry = _make_hass_and_entry(target)
+
+    with patch(
+        "custom_components.calendar_bridge.services.async_resolve_device",
+        return_value=(entry, "sub1"),
+    ):
+        result = await async_handle_update_event(
+            hass,
+            _call(
+                {
+                    ATTR_DEVICE_ID: _DEVICE_ID,
+                    ATTR_UID: "uid-1",
+                    ATTR_ALL_DAY: True,
+                    ATTR_START: datetime(2026, 10, 1, 0, 0),
+                    ATTR_END: datetime(2026, 10, 1, 0, 0),
+                }
+            ),
+        )
+
+    assert result == {"updated": True}
+
+
+# --- R5-04: an invalid rrule must be rejected up front with a translated
+# error, not surface as a raw ValueError from deep inside the CalDAV write
+# path (or an unmodeled failure against the Google API). The rule itself is
+# never repaired -- only rejected.
+
+
+@pytest.mark.asyncio
+async def test_create_event_rejects_an_invalid_rrule():
+    target = MagicMock()
+    target.async_create_event = AsyncMock(return_value="uid-1")
+    hass, entry = _make_hass_and_entry(target)
+
+    with (
+        patch(
+            "custom_components.calendar_bridge.services.async_resolve_device",
+            return_value=(entry, "sub1"),
+        ),
+        pytest.raises(ServiceValidationError) as exc_info,
+    ):
+        await async_handle_create_event(
+            hass,
+            _call(
+                {
+                    ATTR_DEVICE_ID: [_DEVICE_ID],
+                    ATTR_SUMMARY: "Test",
+                    ATTR_START: datetime(2026, 10, 1, 9, 0, tzinfo=UTC),
+                    ATTR_ALL_DAY: False,
+                    ATTR_RRULE: "FREQ=NEVER",
+                }
+            ),
+        )
+
+    assert exc_info.value.translation_key == "invalid_rrule"
+    target.async_create_event.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_update_event_rejects_an_invalid_rrule():
+    target = MagicMock()
+    target.async_update_event = AsyncMock(return_value=True)
+    hass, entry = _make_hass_and_entry(target)
+
+    with (
+        patch(
+            "custom_components.calendar_bridge.services.async_resolve_device",
+            return_value=(entry, "sub1"),
+        ),
+        pytest.raises(ServiceValidationError) as exc_info,
+    ):
+        await async_handle_update_event(
+            hass,
+            _call({ATTR_DEVICE_ID: _DEVICE_ID, ATTR_UID: "uid-1", ATTR_RRULE: "FREQ=NEVER"}),
+        )
+
+    assert exc_info.value.translation_key == "invalid_rrule"
+    target.async_update_event.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_update_event_empty_rrule_still_clears_the_series_not_rejected():
+    # rrule="" is the documented way to turn a series back into a single
+    # event (EventUpdate.rrule="" pops RRULE without re-adding one) -- must
+    # not be treated as an invalid rule.
+    target = MagicMock()
+    target.async_update_event = AsyncMock(return_value=True)
+    hass, entry = _make_hass_and_entry(target)
+
+    with patch(
+        "custom_components.calendar_bridge.services.async_resolve_device",
+        return_value=(entry, "sub1"),
+    ):
+        result = await async_handle_update_event(
+            hass, _call({ATTR_DEVICE_ID: _DEVICE_ID, ATTR_UID: "uid-1", ATTR_RRULE: ""})
+        )
+
+    assert result == {"updated": True}
