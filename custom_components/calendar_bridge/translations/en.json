@@ -170,7 +170,8 @@
       },
       "abort": {
         "reconfigure_successful": "Calendar defaults updated.",
-        "cannot_connect": "Could not connect to the server."
+        "cannot_connect": "Could not connect to the server.",
+        "invalid_auth": "Authentication failed. Check your username/password."
       }
     }
   },
@@ -233,6 +234,12 @@
     },
     "calendar_not_loaded": {
       "message": "The calendar for device {device_id} is not currently loaded (its account may be reloading or have a setup error)."
+    },
+    "end_before_start": {
+      "message": "The event's end must be after its start."
+    },
+    "invalid_rrule": {
+      "message": "The rrule is not a valid RFC 5545 recurrence rule."
     }
   },
   "services": {

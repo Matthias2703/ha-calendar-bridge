@@ -472,7 +472,18 @@ class CalendarSubentryFlow(ConfigSubentryFlow):
                     entry.data[CONF_PASSWORD],
                     entry.data[CONF_VERIFY_SSL],
                 )
-                self._calendars = await self.hass.async_add_executor_job(discover_calendars, client)
+                try:
+                    self._calendars = await self.hass.async_add_executor_job(
+                        discover_calendars, client
+                    )
+                except CalDavAuthError:
+                    # Rejected credentials -- the account's own reauth flow
+                    # is the right place to fix this, not a half-finished
+                    # "add calendar" dialog (R5-03).
+                    entry.async_start_reauth(self.hass)
+                    return self.async_abort(reason="invalid_auth")
+                except CalDavConnectionError:
+                    return self.async_abort(reason="cannot_connect")
             choices = {
                 url: name
                 for url, name in _calendar_choices(self._calendars).items()
