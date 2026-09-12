@@ -7,7 +7,10 @@ from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 from typing import Literal, Protocol
 
+from homeassistant.core import HomeAssistant
 from homeassistant.util import dt as dt_util
+
+from .const import CONF_CALENDAR_URL, CONF_DISPLAY_NAME
 
 ReminderMethod = Literal["popup", "email"]
 
@@ -290,6 +293,32 @@ def all_day_bounds(start: datetime | date, end: datetime | date | None) -> tuple
     if end_date <= start_date:
         end_date = start_date + timedelta(days=1)
     return start_date, end_date
+
+
+# Never a calendar_ref/URL/account identifier itself -- see
+# `resolve_subentry_title`'s own docstring for why.
+_UNKNOWN_CALENDAR_LABEL = "a calendar"
+
+
+def resolve_subentry_title(hass: HomeAssistant, entry_id: str, calendar_ref: str) -> str:
+    """A safe-to-log label for calendar_ref: its subentry's own display title.
+
+    Used by both backends' own internal failure logging (see
+    `caldav_target.py`/`google_target.py`) to keep account/calendar
+    identifiers out of the log entirely -- a Google `calendar_ref` is
+    typically the account's own email address, and a CalDAV one is a full
+    account URL; `diagnostics.py` already refuses to include either for the
+    same reason. Falls back to a generic, non-identifying phrase (never
+    calendar_ref itself) if the owning config entry or a subentry matching
+    `calendar_ref` can no longer be found -- e.g. a race where the subentry
+    this call was already in flight for got removed concurrently.
+    """
+    entry = hass.config_entries.async_get_entry(entry_id)
+    if entry is not None:
+        for subentry in entry.subentries.values():
+            if subentry.data.get(CONF_CALENDAR_URL) == calendar_ref:
+                return str(subentry.data.get(CONF_DISPLAY_NAME) or _UNKNOWN_CALENDAR_LABEL)
+    return _UNKNOWN_CALENDAR_LABEL
 
 
 class CalendarNotFoundError(Exception):

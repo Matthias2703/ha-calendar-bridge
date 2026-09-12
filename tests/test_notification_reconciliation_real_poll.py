@@ -207,7 +207,7 @@ async def test_google_explicit_entry_with_a_naive_start_is_found_by_the_next_pol
     europe_berlin_timezone,
 ) -> None:
     hass = _make_scheduler_hass()
-    target = GoogleCalendarTarget(hass, "google_entry_1")
+    target = GoogleCalendarTarget(hass, "entry_1", "google_entry_1")
     naive_start = datetime(2026, 10, 5, 9, 0)  # naive -- interpreted as Europe/Berlin
     spec = EventSpec(summary="Standup", start=naive_start, end=naive_start + timedelta(minutes=30))
 
@@ -223,7 +223,7 @@ async def test_google_explicit_entry_on_the_dst_transition_day_is_found_by_the_n
     europe_berlin_timezone,
 ) -> None:
     hass = _make_scheduler_hass()
-    target = GoogleCalendarTarget(hass, "google_entry_1")
+    target = GoogleCalendarTarget(hass, "entry_1", "google_entry_1")
     dst_day_start = datetime(2027, 3, 28, 9, 0)  # naive -- Europe/Berlin's spring-forward day
     spec = EventSpec(
         summary="Standup", start=dst_day_start, end=dst_day_start + timedelta(minutes=30)
@@ -239,7 +239,7 @@ async def test_google_explicit_entry_on_the_dst_transition_day_is_found_by_the_n
 @pytest.mark.asyncio
 async def test_google_explicit_entry_for_a_series_is_found_by_the_next_poll() -> None:
     hass = _make_scheduler_hass()
-    target = GoogleCalendarTarget(hass, "google_entry_1")
+    target = GoogleCalendarTarget(hass, "entry_1", "google_entry_1")
     start = datetime(2026, 10, 5, 9, 0, tzinfo=UTC)
     spec = EventSpec(
         summary="Standup",

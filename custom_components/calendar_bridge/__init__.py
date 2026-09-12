@@ -291,7 +291,7 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
                     except Exception:  # noqa: BLE001 -- one bad calendar must not block the rest
                         _LOGGER.warning(
                             "Failed to check %s for a matching event",
-                            subentry.data[CONF_CALENDAR_URL],
+                            subentry.data[CONF_DISPLAY_NAME],
                             exc_info=True,
                         )
                         continue
@@ -450,7 +450,9 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
 async def async_setup_entry(hass: HomeAssistant, entry: CalendarBridgeConfigEntry) -> bool:
     """Set up a Calendar Bridge account (CalDAV or Google) from a config entry."""
     if CONF_GOOGLE_ENTRY_ID in entry.data:
-        entry.runtime_data = GoogleCalendarTarget(hass, entry.data[CONF_GOOGLE_ENTRY_ID])
+        entry.runtime_data = GoogleCalendarTarget(
+            hass, entry.entry_id, entry.data[CONF_GOOGLE_ENTRY_ID]
+        )
     else:
         entry.runtime_data = CalDavCalendarTarget(
             hass,

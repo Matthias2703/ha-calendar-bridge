@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import uuid
 from datetime import UTC, date, datetime, time, timedelta
 from unittest.mock import MagicMock, patch
@@ -11,12 +12,22 @@ import caldav
 import icalendar
 import pytest
 import recurring_ical_events
+from homeassistant.const import CONF_PASSWORD, CONF_URL, CONF_USERNAME, CONF_VERIFY_SSL
 from homeassistant.util import dt as dt_util
+from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.calendar_bridge.caldav_target import (
     CalDavAuthError,
     CalDavCalendarTarget,
     CalDavConnectionError,
+)
+from custom_components.calendar_bridge.const import (
+    CONF_CALENDAR_URL,
+    CONF_DEFAULT_REMINDER_METHOD,
+    CONF_DEFAULT_REMINDER_MINUTES,
+    CONF_DISPLAY_NAME,
+    DOMAIN,
+    REMINDER_METHOD_POPUP,
 )
 from custom_components.calendar_bridge.target import (
     CalendarNotFoundError,
@@ -1166,7 +1177,11 @@ async def test_poll_starts_reauth_on_auth_error():
         )
 
     assert seen is None
-    hass.config_entries.async_get_entry.assert_called_once_with("entry_1")
+    # Called twice now: once by `_start_reauth`, once more by
+    # `resolve_subentry_title` resolving a safe-to-log label for the
+    # failure warning (privacy fix) -- what this test actually guards is
+    # that reauth itself started, asserted directly below.
+    hass.config_entries.async_get_entry.assert_any_call("entry_1")
     mock_entry.async_start_reauth.assert_called_once_with(hass)
 
 
@@ -1197,6 +1212,7 @@ async def test_poll_does_not_start_reauth_on_a_plain_connection_error():
     target, hass = _make_target_with_hass()
     mock_client = MagicMock()
     mock_client.principal.side_effect = caldav.lib.error.DAVError("unreachable")
+    mock_entry = hass.config_entries.async_get_entry.return_value
 
     with patch(
         "custom_components.calendar_bridge.caldav_target.build_client", return_value=mock_client
@@ -1205,7 +1221,11 @@ async def test_poll_does_not_start_reauth_on_a_plain_connection_error():
             "https://example.test/cal/", set(), 30, "popup", timedelta(days=365), False
         )
 
-    hass.config_entries.async_get_entry.assert_not_called()
+    # `async_get_entry` is now also called for the unrelated purpose of
+    # resolving a non-identifying label for the failure log (privacy fix) --
+    # what this test actually guards is that a plain connection error never
+    # triggers reauth, unlike an auth error.
+    mock_entry.async_start_reauth.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -2376,3 +2396,218 @@ async def test_delete_event_non_iana_tzid_gets_a_matching_vtimezone():
     assert reparsed.get_used_tzids() <= present
     occurrences = recurring_ical_events.of(reparsed).between((2026, 10, 5), (2026, 10, 11))
     assert len(occurrences) == 0
+
+
+# --- Privacy: calendar_ref/account URL must never reach a log message ---
+# (found during a review of every _LOGGER call in caldav_target.py/
+# google_target.py that embeds calendar_ref -- same treatment as R5-07's own
+# poll-reachability logging: the subentry own display title, resolved via
+# target.resolve_subentry_title, replaces the raw calendar_ref/URL.)
+
+_LEAK_CAL = "https://caldav.example.test/private-calendar-slug"
+
+
+def _real_hass_entry_with_calendar(hass, title: str = "Home") -> MockConfigEntry:
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={
+            CONF_URL: "https://caldav.example.test/",
+            CONF_USERNAME: "user@example.test",
+            CONF_PASSWORD: "hunter2",
+            CONF_VERIFY_SSL: True,
+        },
+        subentries_data=[
+            {
+                "subentry_type": "calendar",
+                "title": title,
+                "unique_id": _LEAK_CAL,
+                "data": {
+                    CONF_CALENDAR_URL: _LEAK_CAL,
+                    CONF_DISPLAY_NAME: title,
+                    CONF_DEFAULT_REMINDER_MINUTES: 15,
+                    CONF_DEFAULT_REMINDER_METHOD: REMINDER_METHOD_POPUP,
+                },
+            }
+        ],
+    )
+    entry.add_to_hass(hass)
+    return entry
+
+
+@pytest.mark.asyncio
+async def test_backfill_reminder_reach_failure_never_logs_the_calendar_url(
+    hass, caplog: pytest.LogCaptureFixture
+) -> None:
+    entry = _real_hass_entry_with_calendar(hass)
+    target = CalDavCalendarTarget(hass, entry.entry_id, _ACCOUNT_URL, "m", "p", True, None)
+    mock_client = MagicMock()
+    mock_client.principal.side_effect = caldav.lib.error.DAVError("unreachable")
+
+    with (
+        caplog.at_level(logging.WARNING),
+        patch(
+            "custom_components.calendar_bridge.caldav_target.build_client",
+            return_value=mock_client,
+        ),
+    ):
+        await target.async_backfill_reminder(
+            _LEAK_CAL, "Native Termin", datetime(2026, 10, 1, 9, 0, tzinfo=UTC), 30, "popup"
+        )
+
+    assert _LEAK_CAL not in caplog.text
+    assert "Home" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_poll_reach_failure_never_logs_the_calendar_url(
+    hass, caplog: pytest.LogCaptureFixture
+) -> None:
+    entry = _real_hass_entry_with_calendar(hass)
+    target = CalDavCalendarTarget(hass, entry.entry_id, _ACCOUNT_URL, "m", "p", True, None)
+    mock_client = MagicMock()
+    mock_client.principal.side_effect = caldav.lib.error.DAVError("unreachable")
+
+    with (
+        caplog.at_level(logging.WARNING),
+        patch(
+            "custom_components.calendar_bridge.caldav_target.build_client",
+            return_value=mock_client,
+        ),
+    ):
+        await target.async_backfill_new_events(
+            _LEAK_CAL, set(), 30, "popup", timedelta(days=365), False
+        )
+
+    assert _LEAK_CAL not in caplog.text
+    assert "Home" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_delete_event_reach_failure_never_logs_the_calendar_url(
+    hass, caplog: pytest.LogCaptureFixture
+) -> None:
+    entry = _real_hass_entry_with_calendar(hass)
+    target = CalDavCalendarTarget(hass, entry.entry_id, _ACCOUNT_URL, "m", "p", True, None)
+    mock_client = MagicMock()
+    mock_client.principal.side_effect = caldav.lib.error.DAVError("unreachable")
+
+    with (
+        caplog.at_level(logging.WARNING),
+        patch(
+            "custom_components.calendar_bridge.caldav_target.build_client",
+            return_value=mock_client,
+        ),
+    ):
+        await target.async_delete_event(_LEAK_CAL, "uid-1")
+
+    assert _LEAK_CAL not in caplog.text
+    assert "Home" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_update_event_reach_failure_never_logs_the_calendar_url(
+    hass, caplog: pytest.LogCaptureFixture
+) -> None:
+    entry = _real_hass_entry_with_calendar(hass)
+    target = CalDavCalendarTarget(hass, entry.entry_id, _ACCOUNT_URL, "m", "p", True, None)
+    mock_client = MagicMock()
+    mock_client.principal.side_effect = caldav.lib.error.DAVError("unreachable")
+
+    with (
+        caplog.at_level(logging.WARNING),
+        patch(
+            "custom_components.calendar_bridge.caldav_target.build_client",
+            return_value=mock_client,
+        ),
+    ):
+        await target.async_update_event(_LEAK_CAL, "uid-1", EventUpdate(summary="New"))
+
+    assert _LEAK_CAL not in caplog.text
+    assert "Home" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_delete_event_save_failure_never_logs_the_calendar_url(
+    hass, caplog: pytest.LogCaptureFixture
+) -> None:
+    # _delete_event own save-error log (unlike the reach-failure logs above)
+    # runs inside the sync method dispatched via async_add_executor_job --
+    # exercised separately since it is a different code path from the outer
+    # async wrapper own except block.
+    entry = _real_hass_entry_with_calendar(hass)
+    target = CalDavCalendarTarget(hass, entry.entry_id, _ACCOUNT_URL, "m", "p", True, None)
+    mock_client, mock_calendar = _mock_client_with_calendar(_LEAK_CAL)
+    mock_event = MagicMock()
+    component = icalendar.Event()
+    component.add("uid", "uid-1")
+    component.add("summary", "Dentist")
+    component.add("dtstart", datetime(2026, 10, 1, 9, 0, tzinfo=UTC))
+    mock_event.icalendar_component = component
+    mock_event.delete.side_effect = caldav.lib.error.DeleteError("conflict")
+    mock_calendar.event_by_uid.return_value = mock_event
+
+    with (
+        caplog.at_level(logging.WARNING),
+        patch(
+            "custom_components.calendar_bridge.caldav_target.build_client",
+            return_value=mock_client,
+        ),
+    ):
+        deleted = await target.async_delete_event(_LEAK_CAL, "uid-1")
+
+    assert deleted is False
+    assert _LEAK_CAL not in caplog.text
+    assert "Home" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_update_event_save_failure_never_logs_the_calendar_url(
+    hass, caplog: pytest.LogCaptureFixture
+) -> None:
+    entry = _real_hass_entry_with_calendar(hass)
+    target = CalDavCalendarTarget(hass, entry.entry_id, _ACCOUNT_URL, "m", "p", True, None)
+    mock_client, mock_calendar = _mock_client_with_calendar(_LEAK_CAL)
+    mock_event = _mock_uid_event("Dentist", datetime(2026, 10, 1, 9, 0, tzinfo=UTC))
+    mock_event.save.side_effect = caldav.lib.error.PutError("conflict")
+    mock_calendar.event_by_uid.return_value = mock_event
+
+    with (
+        caplog.at_level(logging.WARNING),
+        patch(
+            "custom_components.calendar_bridge.caldav_target.build_client",
+            return_value=mock_client,
+        ),
+    ):
+        updated = await target.async_update_event(
+            _LEAK_CAL, "evt-uid-1", EventUpdate(summary="New")
+        )
+
+    assert updated is False
+    assert _LEAK_CAL not in caplog.text
+    assert "Home" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_delete_event_occurrence_save_failure_never_logs_the_calendar_url(
+    hass, caplog: pytest.LogCaptureFixture
+) -> None:
+    entry = _real_hass_entry_with_calendar(hass)
+    target = CalDavCalendarTarget(hass, entry.entry_id, _ACCOUNT_URL, "m", "p", True, None)
+    mock_client, mock_calendar = _mock_client_with_calendar(_LEAK_CAL)
+    mock_event = _mock_recurring_event("series-1", datetime(2026, 10, 1, 9, 0, tzinfo=UTC))
+    mock_event.save.side_effect = caldav.lib.error.PutError("conflict")
+    mock_calendar.event_by_uid.return_value = mock_event
+    occurrence = datetime(2026, 10, 5, 9, 0, tzinfo=UTC)
+
+    with (
+        caplog.at_level(logging.WARNING),
+        patch(
+            "custom_components.calendar_bridge.caldav_target.build_client",
+            return_value=mock_client,
+        ),
+    ):
+        deleted = await target.async_delete_event(_LEAK_CAL, "series-1", occurrence=occurrence)
+
+    assert deleted is False
+    assert _LEAK_CAL not in caplog.text
+    assert "Home" in caplog.text

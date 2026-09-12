@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import UTC, date, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -106,6 +107,41 @@ async def test_reactive_listener_start_date_gives_a_date_not_datetime(
     assert isinstance(start_arg, date)
     assert not isinstance(start_arg, datetime)
     assert start_arg == date(2026, 10, 3)
+
+
+@pytest.mark.asyncio
+async def test_reactive_listener_dry_run_check_failure_never_logs_the_calendar_url(
+    hass: HomeAssistant, enable_custom_integrations: None, caplog: pytest.LogCaptureFixture
+) -> None:
+    # A failing per-calendar dry-run check (__init__.py's own reactive
+    # backfill listener) already has the subentry object in hand -- no
+    # lookup needed, so it must log the display title, never the raw
+    # calendar_url (privacy fix, same treatment as R5-07's poll logging).
+    entry = _make_minimal_caldav_entry()
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    mock_target = AsyncMock()
+    mock_target.async_backfill_reminder = AsyncMock(side_effect=RuntimeError("boom"))
+    entry.runtime_data = mock_target
+
+    with (
+        caplog.at_level(logging.WARNING),
+        patch("custom_components.calendar_bridge.asyncio.sleep", new=AsyncMock()),
+    ):
+        hass.bus.async_fire(
+            EVENT_CALL_SERVICE,
+            {
+                ATTR_DOMAIN: "calendar",
+                ATTR_SERVICE: "create_event",
+                ATTR_SERVICE_DATA: {"summary": "Birthday", "start_date": "2026-10-03"},
+            },
+        )
+        await hass.async_block_till_done()
+
+    assert _CAL1 not in caplog.text
+    assert "Home" in caplog.text
 
 
 @pytest.mark.asyncio

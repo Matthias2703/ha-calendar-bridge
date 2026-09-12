@@ -30,6 +30,7 @@ from .target import (
     event_starts_match,
     occurrence_matches,
     preserve_time_representation,
+    resolve_subentry_title,
     series_instance_key,
 )
 
@@ -233,7 +234,8 @@ class CalDavCalendarTarget:
                 dry_run,
             )
         except CalDavAuthError, CalDavConnectionError:
-            _LOGGER.warning("Could not reach %s to check for a matching event", calendar_ref)
+            label = resolve_subentry_title(self._hass, self._entry_id, calendar_ref)
+            _LOGGER.warning("Could not reach %s to check for a matching event", label)
             return False
 
     def _backfill_reminder(
@@ -352,7 +354,8 @@ class CalDavCalendarTarget:
                 skip_backfill,
             )
         except CalDavAuthError, CalDavConnectionError:
-            _LOGGER.warning("Could not reach %s to poll for new events", calendar_ref)
+            label = resolve_subentry_title(self._hass, self._entry_id, calendar_ref)
+            _LOGGER.warning("Could not reach %s to poll for new events", label)
             return None
 
     def _backfill_new_events(
@@ -471,14 +474,19 @@ class CalDavCalendarTarget:
         self, calendar_ref: str, uid: str, occurrence: datetime | date | None = None
     ) -> bool:
         """Delete the event (or one occurrence of it) identified by uid."""
+        # Resolved here (the event loop), never inside `_delete_event` itself
+        # -- that method runs in a worker thread via `_async_run`, and
+        # `resolve_subentry_title` touches `hass.config_entries`, which is
+        # only safe to read from the event loop thread.
+        label = resolve_subentry_title(self._hass, self._entry_id, calendar_ref)
         try:
-            return await self._async_run(self._delete_event, calendar_ref, uid, occurrence)
+            return await self._async_run(self._delete_event, calendar_ref, uid, occurrence, label)
         except CalDavAuthError, CalDavConnectionError:
-            _LOGGER.warning("Could not reach %s to delete an event", calendar_ref)
+            _LOGGER.warning("Could not reach %s to delete an event", label)
             return False
 
     def _delete_event(
-        self, calendar_ref: str, uid: str, occurrence: datetime | date | None
+        self, calendar_ref: str, uid: str, occurrence: datetime | date | None, label: str
     ) -> bool:
         client = build_client(self._url, self._username, self._password, self._verify_ssl)
         calendar = self._find_calendar(client, calendar_ref)
@@ -493,7 +501,7 @@ class CalDavCalendarTarget:
             try:
                 event.delete()
             except caldav.lib.error.DeleteError:
-                _LOGGER.warning("Failed to delete event %s on %s", uid, calendar_ref, exc_info=True)
+                _LOGGER.warning("Failed to delete event %s on %s", uid, label, exc_info=True)
                 return False
             return True
 
@@ -522,7 +530,7 @@ class CalDavCalendarTarget:
             _LOGGER.warning(
                 "Failed to save %s after deleting an occurrence on %s",
                 uid,
-                calendar_ref,
+                label,
                 exc_info=True,
             )
             return False
@@ -536,10 +544,15 @@ class CalDavCalendarTarget:
         occurrence: datetime | date | None = None,
     ) -> bool:
         """Apply `updates` to the event (or one occurrence of it) identified by uid."""
+        # See async_delete_event's own comment: resolved here (event loop),
+        # never inside `_update_event` (a worker thread).
+        label = resolve_subentry_title(self._hass, self._entry_id, calendar_ref)
         try:
-            return await self._async_run(self._update_event, calendar_ref, uid, updates, occurrence)
+            return await self._async_run(
+                self._update_event, calendar_ref, uid, updates, occurrence, label
+            )
         except CalDavAuthError, CalDavConnectionError:
-            _LOGGER.warning("Could not reach %s to update an event", calendar_ref)
+            _LOGGER.warning("Could not reach %s to update an event", label)
             return False
 
     def _update_event(
@@ -548,6 +561,7 @@ class CalDavCalendarTarget:
         uid: str,
         updates: EventUpdate,
         occurrence: datetime | date | None,
+        label: str,
     ) -> bool:
         client = build_client(self._url, self._username, self._password, self._verify_ssl)
         calendar = self._find_calendar(client, calendar_ref)
@@ -583,7 +597,7 @@ class CalDavCalendarTarget:
         try:
             event.save()
         except caldav.lib.error.PutError:
-            _LOGGER.warning("Failed to save %s on %s", uid, calendar_ref, exc_info=True)
+            _LOGGER.warning("Failed to save %s on %s", uid, label, exc_info=True)
             return False
         return True
 

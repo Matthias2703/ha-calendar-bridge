@@ -6,10 +6,92 @@ from datetime import UTC, date, datetime
 from zoneinfo import ZoneInfo
 
 import pytest
+from homeassistant.const import CONF_PASSWORD, CONF_URL, CONF_USERNAME, CONF_VERIFY_SSL
+from homeassistant.core import HomeAssistant
 from homeassistant.helpers import config_validation as cv
 from homeassistant.util import dt as dt_util
+from pytest_homeassistant_custom_component.common import MockConfigEntry
 
-from custom_components.calendar_bridge.target import occurrence_matches, render_notify_message
+from custom_components.calendar_bridge.const import (
+    CONF_CALENDAR_URL,
+    CONF_DEFAULT_REMINDER_METHOD,
+    CONF_DEFAULT_REMINDER_MINUTES,
+    CONF_DISPLAY_NAME,
+    DOMAIN,
+    REMINDER_METHOD_POPUP,
+)
+from custom_components.calendar_bridge.target import (
+    occurrence_matches,
+    render_notify_message,
+    resolve_subentry_title,
+)
+
+_CAL1 = "https://caldav.example.test/cal1"
+
+
+def _entry_with_calendar(title: str = "Home") -> MockConfigEntry:
+    return MockConfigEntry(
+        domain=DOMAIN,
+        data={
+            CONF_URL: "https://caldav.example.test/",
+            CONF_USERNAME: "user@example.test",
+            CONF_PASSWORD: "hunter2",
+            CONF_VERIFY_SSL: True,
+        },
+        subentries_data=[
+            {
+                "subentry_type": "calendar",
+                "title": title,
+                "unique_id": _CAL1,
+                "data": {
+                    CONF_CALENDAR_URL: _CAL1,
+                    CONF_DISPLAY_NAME: title,
+                    CONF_DEFAULT_REMINDER_MINUTES: 15,
+                    CONF_DEFAULT_REMINDER_METHOD: REMINDER_METHOD_POPUP,
+                },
+            }
+        ],
+    )
+
+
+def test_resolve_subentry_title_finds_the_matching_subentrys_display_name(
+    hass: HomeAssistant,
+) -> None:
+    entry = _entry_with_calendar("Home")
+    entry.add_to_hass(hass)
+
+    assert resolve_subentry_title(hass, entry.entry_id, _CAL1) == "Home"
+
+
+def test_resolve_subentry_title_never_returns_the_calendar_ref_itself(
+    hass: HomeAssistant,
+) -> None:
+    entry = _entry_with_calendar("Home")
+    entry.add_to_hass(hass)
+
+    label = resolve_subentry_title(hass, entry.entry_id, _CAL1)
+    assert _CAL1 not in label
+
+
+def test_resolve_subentry_title_falls_back_when_the_entry_is_gone(
+    hass: HomeAssistant,
+) -> None:
+    # Never happened to be registered at all -- e.g. a race where the
+    # config entry/subentry was already removed by the time an in-flight
+    # operation's error surfaces.
+    label = resolve_subentry_title(hass, "nonexistent_entry_id", _CAL1)
+    assert _CAL1 not in label
+    assert label  # a real, non-identifying phrase, never blank
+
+
+def test_resolve_subentry_title_falls_back_when_no_subentry_matches_the_ref(
+    hass: HomeAssistant,
+) -> None:
+    entry = _entry_with_calendar("Home")
+    entry.add_to_hass(hass)
+
+    label = resolve_subentry_title(hass, entry.entry_id, "https://caldav.example.test/other")
+    assert "https://caldav.example.test/other" not in label
 
 
 def test_cv_datetime_parses_a_bare_date_string_as_a_midnight_datetime() -> None:
