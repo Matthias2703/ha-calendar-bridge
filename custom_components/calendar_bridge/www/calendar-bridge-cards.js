@@ -4,36 +4,113 @@
  * Two card types sharing one implementation:
  *   - calendar-bridge-create-card-mobile  (single column, compact)
  *   - calendar-bridge-create-card-tablet  (two columns, shows the reminder
- *     method field and starts with "Weitere Angaben" expanded)
+ *     method field and starts with "More details" expanded)
  *
  * Pure frontend: the calendar picker is built entirely from the connected
  * hass object's entity/device registries (every entity calendar_bridge
  * creates carries `platform: "calendar_bridge"`), so no new backend API is
  * needed -- the card just calls the existing calendar_bridge.create_event
  * service with a device_id, exactly like the create_event service UI does.
+ *
+ * UI text is bilingual (en/de), picked from hass.language at render time --
+ * every other locale falls back to English rather than always shipping German.
  */
 
-const REMINDER_OPTIONS = [
-  { value: "", label: "Keine" },
-  { value: "5", label: "5 Minuten vorher" },
-  { value: "15", label: "15 Minuten vorher" },
-  { value: "30", label: "30 Minuten vorher" },
-  { value: "60", label: "1 Stunde vorher" },
-  { value: "1440", label: "1 Tag vorher" },
-];
+const STRINGS = {
+  en: {
+    header: "Create event",
+    noCalendarFound: "No Calendar Bridge calendar found",
+    calendar: "Calendar",
+    title: "Title",
+    titlePlaceholder: "e.g. Dentist",
+    date: "Date",
+    allDay: "All day",
+    start: "Start",
+    end: "End",
+    reminder: "Reminder",
+    method: "Method",
+    recurrence: "Recurrence",
+    moreDetails: "More details",
+    location: "Location",
+    description: "Description",
+    submit: "Create event",
+    submitting: "Creating…",
+    footnote: "The reminder is saved in the calendar.",
+    errorNoCalendar: "Please select a calendar.",
+    errorNoTitle: "Please enter a title.",
+    errorNoDate: "Please select a date.",
+    errorGeneric: "Could not create the event.",
+    notifyCreated: (summary) => `Event "${summary}" was created.`,
+    reminderOptions: [
+      { value: "", label: "None" },
+      { value: "5", label: "5 minutes before" },
+      { value: "15", label: "15 minutes before" },
+      { value: "30", label: "30 minutes before" },
+      { value: "60", label: "1 hour before" },
+      { value: "1440", label: "1 day before" },
+    ],
+    methodOptions: [
+      { value: "popup", label: "Popup" },
+      { value: "email", label: "Email" },
+    ],
+    rruleOptions: [
+      { value: "", label: "None" },
+      { value: "FREQ=DAILY", label: "Daily" },
+      { value: "FREQ=WEEKLY", label: "Weekly" },
+      { value: "FREQ=MONTHLY", label: "Monthly" },
+      { value: "FREQ=YEARLY", label: "Yearly" },
+    ],
+  },
+  de: {
+    header: "Termin anlegen",
+    noCalendarFound: "Kein Calendar-Bridge-Kalender gefunden",
+    calendar: "Kalender",
+    title: "Titel",
+    titlePlaceholder: "z. B. Zahnarzt",
+    date: "Datum",
+    allDay: "Ganztägig",
+    start: "Beginn",
+    end: "Ende",
+    reminder: "Erinnerung",
+    method: "Methode",
+    recurrence: "Wiederholung",
+    moreDetails: "Weitere Angaben",
+    location: "Ort",
+    description: "Beschreibung",
+    submit: "Termin erstellen",
+    submitting: "Wird erstellt …",
+    footnote: "Erinnerung wird im Kalender gespeichert.",
+    errorNoCalendar: "Bitte einen Kalender auswählen.",
+    errorNoTitle: "Bitte einen Titel eingeben.",
+    errorNoDate: "Bitte ein Datum auswählen.",
+    errorGeneric: "Termin konnte nicht erstellt werden.",
+    notifyCreated: (summary) => `Termin "${summary}" wurde erstellt.`,
+    reminderOptions: [
+      { value: "", label: "Keine" },
+      { value: "5", label: "5 Minuten vorher" },
+      { value: "15", label: "15 Minuten vorher" },
+      { value: "30", label: "30 Minuten vorher" },
+      { value: "60", label: "1 Stunde vorher" },
+      { value: "1440", label: "1 Tag vorher" },
+    ],
+    methodOptions: [
+      { value: "popup", label: "Popup" },
+      { value: "email", label: "E-Mail" },
+    ],
+    rruleOptions: [
+      { value: "", label: "Keine" },
+      { value: "FREQ=DAILY", label: "Täglich" },
+      { value: "FREQ=WEEKLY", label: "Wöchentlich" },
+      { value: "FREQ=MONTHLY", label: "Monatlich" },
+      { value: "FREQ=YEARLY", label: "Jährlich" },
+    ],
+  },
+};
 
-const METHOD_OPTIONS = [
-  { value: "popup", label: "Popup" },
-  { value: "email", label: "E-Mail" },
-];
-
-const RRULE_OPTIONS = [
-  { value: "", label: "Keine" },
-  { value: "FREQ=DAILY", label: "Täglich" },
-  { value: "FREQ=WEEKLY", label: "Wöchentlich" },
-  { value: "FREQ=MONTHLY", label: "Monatlich" },
-  { value: "FREQ=YEARLY", label: "Jährlich" },
-];
+function stringsFor(hass) {
+  const lang = (hass && hass.language) || "en";
+  return lang.toLowerCase().startsWith("de") ? STRINGS.de : STRINGS.en;
+}
 
 const CARD_CSS = `
   :host { display: block; }
@@ -154,6 +231,7 @@ class CalendarBridgeCreateCardBase extends HTMLElement {
   }
 
   _refreshDeviceOptions() {
+    const t = stringsFor(this._hass);
     const devices = this._calendarDevices();
     const key = devices.map((d) => `${d.id}:${d.name}`).join("|");
     if (key === this._deviceOptionsKey) return;
@@ -163,7 +241,7 @@ class CalendarBridgeCreateCardBase extends HTMLElement {
     const previous = this._state.device_id;
     select.innerHTML =
       devices.length === 0
-        ? '<option value="">Kein Calendar-Bridge-Kalender gefunden</option>'
+        ? `<option value="">${this._escape(t.noCalendarFound)}</option>`
         : devices
             .map((d) => `<option value="${d.id}">${this._escape(d.name)}</option>`)
             .join("");
@@ -211,44 +289,45 @@ class CalendarBridgeCreateCardBase extends HTMLElement {
 
   _template() {
     const s = this._state;
+    const t = stringsFor(this._hass);
     const timeRow = s.all_day
       ? ""
       : this._showMethod
         ? `<div class="grid2">
-             <div class="row"><label for="start">Beginn</label><input type="time" id="start" value="${s.start}"></div>
-             <div class="row"><label for="end">Ende</label><input type="time" id="end" value="${s.end}"></div>
+             <div class="row"><label for="start">${t.start}</label><input type="time" id="start" value="${s.start}"></div>
+             <div class="row"><label for="end">${t.end}</label><input type="time" id="end" value="${s.end}"></div>
            </div>`
-        : `<div class="row"><label for="start">Beginn</label><input type="time" id="start" value="${s.start}"></div>
-           <div class="row"><label for="end">Ende</label><input type="time" id="end" value="${s.end}"></div>`;
+        : `<div class="row"><label for="start">${t.start}</label><input type="time" id="start" value="${s.start}"></div>
+           <div class="row"><label for="end">${t.end}</label><input type="time" id="end" value="${s.end}"></div>`;
 
     const reminderRow = this._showMethod
       ? `<div class="grid2">
-           <div class="row"><label for="reminder">Erinnerung</label>${this._select("reminder", REMINDER_OPTIONS, s.reminder_minutes)}</div>
-           <div class="row"><label for="method">Methode</label>${this._select("method", METHOD_OPTIONS, s.method)}</div>
+           <div class="row"><label for="reminder">${t.reminder}</label>${this._select("reminder", t.reminderOptions, s.reminder_minutes)}</div>
+           <div class="row"><label for="method">${t.method}</label>${this._select("method", t.methodOptions, s.method)}</div>
          </div>`
-      : `<div class="row"><label for="reminder">Erinnerung</label>${this._select("reminder", REMINDER_OPTIONS, s.reminder_minutes)}</div>`;
+      : `<div class="row"><label for="reminder">${t.reminder}</label>${this._select("reminder", t.reminderOptions, s.reminder_minutes)}</div>`;
 
     return `
-      <div class="header"><ha-icon icon="mdi:calendar-plus"></ha-icon><span>Termin anlegen</span></div>
-      <div class="row"><label for="calendar">Kalender</label><select id="calendar"></select></div>
-      <div class="row"><label for="summary">Titel</label><input type="text" id="summary" placeholder="z. B. Zahnarzt" value="${this._escape(s.summary)}"></div>
+      <div class="header"><ha-icon icon="mdi:calendar-plus"></ha-icon><span>${t.header}</span></div>
+      <div class="row"><label for="calendar">${t.calendar}</label><select id="calendar"></select></div>
+      <div class="row"><label for="summary">${t.title}</label><input type="text" id="summary" placeholder="${t.titlePlaceholder}" value="${this._escape(s.summary)}"></div>
       <div class="grid2">
-        <div class="row"><label for="date">Datum</label><input type="date" id="date" value="${s.date}"></div>
-        <div class="row toggle-row"><label for="all_day">Ganztägig</label><ha-switch id="all_day" ${s.all_day ? "checked" : ""}></ha-switch></div>
+        <div class="row"><label for="date">${t.date}</label><input type="date" id="date" value="${s.date}"></div>
+        <div class="row toggle-row"><label for="all_day">${t.allDay}</label><ha-switch id="all_day" ${s.all_day ? "checked" : ""}></ha-switch></div>
       </div>
       ${timeRow}
       ${reminderRow}
-      <div class="row"><label for="rrule">Wiederholung</label>${this._select("rrule", RRULE_OPTIONS, s.rrule)}</div>
+      <div class="row"><label for="rrule">${t.recurrence}</label>${this._select("rrule", t.rruleOptions, s.rrule)}</div>
       <details class="more" ${this._expanded ? "open" : ""}>
-        <summary><ha-icon icon="mdi:chevron-down"></ha-icon> Weitere Angaben</summary>
+        <summary><ha-icon icon="mdi:chevron-down"></ha-icon> ${t.moreDetails}</summary>
         <div class="more-fields">
-          <div class="row"><label for="location">Ort</label><input type="text" id="location" value="${this._escape(s.location)}"></div>
-          <div class="row"><label for="description">Beschreibung</label><textarea id="description">${this._escape(s.description)}</textarea></div>
+          <div class="row"><label for="location">${t.location}</label><input type="text" id="location" value="${this._escape(s.location)}"></div>
+          <div class="row"><label for="description">${t.description}</label><textarea id="description">${this._escape(s.description)}</textarea></div>
         </div>
       </details>
-      <button class="submit" id="submit">Termin erstellen</button>
+      <button class="submit" id="submit">${t.submit}</button>
       ${this._error ? `<div class="error">${this._escape(this._error)}</div>` : ""}
-      <div class="footnote"><ha-icon icon="mdi:information-outline"></ha-icon><span>Erinnerung wird im Kalender gespeichert.</span></div>
+      <div class="footnote"><ha-icon icon="mdi:information-outline"></ha-icon><span>${t.footnote}</span></div>
     `;
   }
 
@@ -308,21 +387,22 @@ class CalendarBridgeCreateCardBase extends HTMLElement {
 
   async _submit() {
     const s = this._state;
+    const t = stringsFor(this._hass);
     this._error = null;
 
     if (!s.device_id) {
-      this._error = "Bitte einen Kalender auswählen.";
+      this._error = t.errorNoCalendar;
       this._rerenderPreservingFocus();
       return;
     }
     if (!s.summary.trim()) {
-      this._error = "Bitte einen Titel eingeben.";
+      this._error = t.errorNoTitle;
       this._rerenderPreservingFocus();
       return;
     }
     const start = this._composeDateTime(s.date, s.all_day ? null : s.start);
     if (!start) {
-      this._error = "Bitte ein Datum auswählen.";
+      this._error = t.errorNoDate;
       this._rerenderPreservingFocus();
       return;
     }
@@ -349,11 +429,11 @@ class CalendarBridgeCreateCardBase extends HTMLElement {
     const submitBtn = this._root.querySelector("#submit");
     if (submitBtn) {
       submitBtn.disabled = true;
-      submitBtn.textContent = "Wird erstellt …";
+      submitBtn.textContent = t.submitting;
     }
     try {
       await this._hass.callService("calendar_bridge", "create_event", payload);
-      this._notify(`Termin "${s.summary.trim()}" wurde erstellt.`);
+      this._notify(t.notifyCreated(s.summary.trim()));
       this._state = {
         ...this._state,
         summary: "",
@@ -364,7 +444,7 @@ class CalendarBridgeCreateCardBase extends HTMLElement {
       };
       this._rerenderPreservingFocus();
     } catch (err) {
-      this._error = (err && err.message) || "Termin konnte nicht erstellt werden.";
+      this._error = (err && err.message) || t.errorGeneric;
       this._rerenderPreservingFocus();
     }
   }
@@ -397,12 +477,12 @@ window.customCards = window.customCards || [];
 window.customCards.push(
   {
     type: "calendar-bridge-create-card-mobile",
-    name: "Calendar Bridge: Termin anlegen (Handy)",
-    description: "Kompaktes Formular zum Anlegen eines Kalendertermins über Calendar Bridge.",
+    name: "Calendar Bridge: Create event (Phone)",
+    description: "Compact form to create a calendar event via Calendar Bridge.",
   },
   {
     type: "calendar-bridge-create-card-tablet",
-    name: "Calendar Bridge: Termin anlegen (Tablet)",
-    description: "Zweispaltiges Formular zum Anlegen eines Kalendertermins über Calendar Bridge, inkl. Erinnerungsmethode.",
+    name: "Calendar Bridge: Create event (Tablet)",
+    description: "Two-column form to create a calendar event via Calendar Bridge, including the reminder method.",
   }
 );
