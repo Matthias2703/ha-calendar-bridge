@@ -74,7 +74,7 @@ async def test_caldav_a_series_known_via_its_bare_uid_is_not_rebackfilled(
 async def test_google_a_series_known_via_its_master_marker_is_not_rebackfilled(
     hass: HomeAssistant,
 ) -> None:
-    target = GoogleCalendarTarget(hass, "google_entry_1")
+    target = GoogleCalendarTarget(hass, "entry_1", "google_entry_1")
     start = datetime.now(UTC) + timedelta(days=1)
     instance = _google_event(
         "series-1_new-instance",

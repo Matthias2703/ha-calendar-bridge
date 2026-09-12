@@ -2,18 +2,29 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import AsyncIterator
 from datetime import UTC, date, datetime, time, timedelta
 from typing import Any
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 from urllib.parse import quote
 
 import pytest
 from gcal_sync.exceptions import ApiException
 from gcal_sync.model import DateOrDatetime, Reminders
 from gcal_sync.model import Event as GoogleEvent
+from homeassistant.const import CONF_PASSWORD, CONF_URL, CONF_USERNAME, CONF_VERIFY_SSL
 from homeassistant.util import dt as dt_util
+from pytest_homeassistant_custom_component.common import MockConfigEntry
 
+from custom_components.calendar_bridge.const import (
+    CONF_CALENDAR_URL,
+    CONF_DEFAULT_REMINDER_METHOD,
+    CONF_DEFAULT_REMINDER_MINUTES,
+    CONF_DISPLAY_NAME,
+    DOMAIN,
+    REMINDER_METHOD_POPUP,
+)
 from custom_components.calendar_bridge.google_target import GoogleCalendarTarget
 from custom_components.calendar_bridge.target import (
     CalendarNotFoundError,
@@ -33,11 +44,19 @@ class _FakeHass:
 
     `_async_service` is always patched below, so the OAuth/session plumbing
     that would otherwise need a real `hass` is never exercised here.
+    `config_entries` is a bare MagicMock -- an unconfigured `async_get_entry`
+    call (used to resolve a subentry's title for logging, see
+    `target.resolve_subentry_title`) naturally returns a Mock whose own
+    `.subentries.values()` is `[]`, so these tests exercise the "no match"
+    fallback unless a test configures it otherwise.
     """
+
+    def __init__(self) -> None:
+        self.config_entries = MagicMock()
 
 
 def _make_target() -> GoogleCalendarTarget:
-    return GoogleCalendarTarget(_FakeHass(), "google_entry_1")  # type: ignore[arg-type]
+    return GoogleCalendarTarget(_FakeHass(), "entry_1", "google_entry_1")  # type: ignore[arg-type]
 
 
 def _google_event(
@@ -1634,3 +1653,108 @@ async def test_update_event_switch_all_day_to_timed_sets_ha_zone(europe_berlin_t
     body = service.async_patch_event.call_args[0][2]
     assert body["start"]["dateTime"] == "2026-10-01T09:00:00+02:00"
     assert body["start"]["timeZone"] == "Europe/Berlin"
+
+
+# --- Privacy: calendar_ref (typically the account's own email) must never
+# reach a log message -- same treatment as caldav_target.py/R5-07: the
+# subentry's own display title, resolved via target.resolve_subentry_title,
+# replaces the raw calendar_ref.
+
+
+def _real_hass_entry_with_calendar(hass, title: str = "Home") -> MockConfigEntry:
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={
+            CONF_URL: "https://caldav.example.test/",
+            CONF_USERNAME: "user@example.test",
+            CONF_PASSWORD: "hunter2",
+            CONF_VERIFY_SSL: True,
+        },
+        subentries_data=[
+            {
+                "subentry_type": "calendar",
+                "title": title,
+                "unique_id": _CALENDAR_REF,
+                "data": {
+                    CONF_CALENDAR_URL: _CALENDAR_REF,
+                    CONF_DISPLAY_NAME: title,
+                    CONF_DEFAULT_REMINDER_MINUTES: 15,
+                    CONF_DEFAULT_REMINDER_METHOD: REMINDER_METHOD_POPUP,
+                },
+            }
+        ],
+    )
+    entry.add_to_hass(hass)
+    return entry
+
+
+@pytest.mark.asyncio
+async def test_backfill_reminder_reach_failure_never_logs_the_calendar_ref(
+    hass, caplog: pytest.LogCaptureFixture
+) -> None:
+    entry = _real_hass_entry_with_calendar(hass)
+    target = GoogleCalendarTarget(hass, entry.entry_id, "google_entry_1")
+    service = _FakeService()
+    service.async_list_events.side_effect = ApiException("boom")
+
+    with caplog.at_level(logging.WARNING), _patched(target, service):
+        await target.async_backfill_reminder(
+            _CALENDAR_REF, "Poll test", datetime(2026, 9, 10, 14, 0, tzinfo=UTC), 30, "popup"
+        )
+
+    assert _CALENDAR_REF not in caplog.text
+    assert "Home" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_poll_reach_failure_never_logs_the_calendar_ref(
+    hass, caplog: pytest.LogCaptureFixture
+) -> None:
+    entry = _real_hass_entry_with_calendar(hass)
+    target = GoogleCalendarTarget(hass, entry.entry_id, "google_entry_1")
+    service = _FakeService()
+    service.async_list_events.side_effect = ApiException("boom")
+
+    with caplog.at_level(logging.WARNING), _patched(target, service):
+        await target.async_backfill_new_events(_CALENDAR_REF, set(), 30, "popup", _LOOKAHEAD, False)
+
+    assert _CALENDAR_REF not in caplog.text
+    assert "Home" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_delete_event_failure_never_logs_the_calendar_ref(
+    hass, caplog: pytest.LogCaptureFixture
+) -> None:
+    entry = _real_hass_entry_with_calendar(hass)
+    target = GoogleCalendarTarget(hass, entry.entry_id, "google_entry_1")
+    service = _FakeService()
+    auth = _auth_finding("evt1")
+    service.async_delete_event.side_effect = ApiException("boom")
+
+    with caplog.at_level(logging.WARNING), _patched(target, service, auth):
+        deleted = await target.async_delete_event(_CALENDAR_REF, "uid-1")
+
+    assert deleted is False
+    assert _CALENDAR_REF not in caplog.text
+    assert "Home" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_update_event_failure_never_logs_the_calendar_ref(
+    hass, caplog: pytest.LogCaptureFixture
+) -> None:
+    entry = _real_hass_entry_with_calendar(hass)
+    target = GoogleCalendarTarget(hass, entry.entry_id, "google_entry_1")
+    service = _FakeService()
+    auth = _auth_finding("evt1")
+    service.async_patch_event.side_effect = ApiException("boom")
+
+    with caplog.at_level(logging.WARNING), _patched(target, service, auth):
+        updated = await target.async_update_event(
+            _CALENDAR_REF, "uid-1", EventUpdate(summary="New")
+        )
+
+    assert updated is False
+    assert _CALENDAR_REF not in caplog.text
+    assert "Home" in caplog.text
