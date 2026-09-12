@@ -52,10 +52,13 @@ rules:
       there is no "unavailable" state to represent.
   integration-owner: done
   log-when-unavailable:
-    status: exempt
+    status: done
     comment: |
-      No coordinator/polling connection whose failures need logging —
-      create_event failures already raise translated exceptions.
+      The periodic per-calendar poll (A2/R5-07) logs a throttled reachability
+      state per calendar: a warning on the first failure (exception or an
+      unreachable result), only debug on further consecutive failures, and a
+      single info once it recovers. Never logs the calendar URL, only the
+      subentry's own display title.
   parallel-updates:
     status: exempt
     comment: |

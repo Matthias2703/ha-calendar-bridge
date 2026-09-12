@@ -7,7 +7,7 @@ import logging
 from datetime import date, datetime, timedelta
 from typing import Any
 
-from homeassistant.config_entries import ConfigEntry
+from homeassistant.config_entries import ConfigEntry, ConfigEntryState
 from homeassistant.const import (
     ATTR_DOMAIN,
     ATTR_SERVICE,
@@ -94,6 +94,63 @@ type CalendarBridgeConfigEntry = ConfigEntry[CalDavCalendarTarget | GoogleCalend
 __all__ = ["DOMAIN"]
 
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
+
+
+def _log_poll_outcome(
+    reachable_state: dict[str, bool],
+    calendar_ref: str,
+    subentry_title: str,
+    *,
+    ok: bool,
+    exc_info: bool = False,
+) -> None:
+    """Log a poll's reachability outcome for one calendar, throttled (R5-07).
+
+    `reachable_state` is a plain in-memory dict (never persisted -- a
+    restart starting "reachable" again is correct, not a bug) keyed by
+    `calendar_ref`, defaulting a never-before-seen calendar to "reachable"
+    so its very first failure still logs a warning. Logs the calendar's
+    subentry *title*, never `calendar_ref` itself -- for Google that's
+    typically the account's own email address, and `diagnostics.py`
+    deliberately never includes it either.
+    """
+    was_reachable = reachable_state.get(calendar_ref, True)
+    if ok:
+        if not was_reachable:
+            _LOGGER.info("'%s' is reachable again", subentry_title)
+        reachable_state[calendar_ref] = True
+        return
+    if was_reachable:
+        _LOGGER.warning("Failed to poll '%s' for new events", subentry_title, exc_info=exc_info)
+    else:
+        _LOGGER.debug(
+            "Still failing to poll '%s' for new events", subentry_title, exc_info=exc_info
+        )
+    reachable_state[calendar_ref] = False
+
+
+def _live_calendar_refs_if_ready(hass: HomeAssistant) -> set[str] | None:
+    """Every calendar_ref currently configured across every calendar_bridge entry.
+
+    Returns None if any entry isn't fully `LOADED` yet -- computing this
+    from an incompletely-loaded set would *look* correct today (HA loads
+    every entry's subentries data synchronously, for every entry, before
+    any entry's own `async_setup_entry` runs at all -- see
+    `config_entries.py`'s `ConfigEntries.async_initialize`, which populates
+    `entry.subentries` straight from the stored config before setup ever
+    starts), but relying on that HA-internal ordering guarantee without a
+    check would turn any future change to it into a silent data-loss bug:
+    pruning another, still-live calendar's seen-UIDs (and, with them, its
+    `has_baseline`) out from under it.
+    """
+    entries = hass.config_entries.async_entries(DOMAIN)
+    if not all(entry.state is ConfigEntryState.LOADED for entry in entries):
+        return None
+    return {
+        subentry.data[CONF_CALENDAR_URL]
+        for entry in entries
+        for subentry in entry.subentries.values()
+    }
 
 
 def _notify_settings(subentry: Any) -> tuple[str, int, str | None] | None:
@@ -270,6 +327,24 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
 
     hass.bus.async_listen(EVENT_CALL_SERVICE, _async_backfill_reminder)
 
+    # R4-08: `async_track_time_interval` schedules its *next* fire before
+    # ever starting the current one, as a background job nothing awaits
+    # (`helpers/event.py`'s `_TrackTimeInterval._interval_listener`) -- a
+    # poll that takes longer than `_POLL_INTERVAL` (a slow CalDAV/Google
+    # response) would otherwise overlap with itself. Left unguarded, two
+    # concurrent CalDAV polls can each see the same reminder-less event
+    # before either has saved its own added VALARM, and both add one --
+    # a real, additive duplicate (Google's own reminder patch replaces the
+    # whole `overrides` list instead, so it's naturally idempotent there,
+    # but CalDAV's `master.add_component(...)` is not). A plain in-memory
+    # flag, not an `asyncio.Lock`, is deliberate -- an overlapping run must
+    # be skipped outright, never queued to run right after the first.
+    poll_in_progress = False
+    # R5-07/log-when-unavailable: per-calendar reachability, in memory only
+    # (a restart starting "reachable" again is correct, not a bug) -- see
+    # `_log_poll_outcome`.
+    calendar_reachable: dict[str, bool] = {}
+
     async def _async_poll_for_new_events(_now: datetime) -> None:
         """Catch events the EVENT_CALL_SERVICE listener above can't.
 
@@ -278,72 +353,95 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
         catch them is to periodically check the calendar for events this
         integration hasn't seen before.
         """
-        for entry in hass.config_entries.async_loaded_entries(DOMAIN):
-            target = entry.runtime_data
-            for subentry in list(entry.subentries.values()):
-                method = subentry.data[CONF_DEFAULT_REMINDER_METHOD]
-                calendar_ref = subentry.data[CONF_CALENDAR_URL]
-                # A calendar's very first poll only ever establishes the UID
-                # baseline -- it never patches a native reminder nor sends an
-                # HA notification, so a user adding an already-populated
-                # calendar isn't surprised by a flood of both for years of
-                # pre-existing events.
-                is_first_poll = not seen_events.has_baseline(calendar_ref)
-                # A calendar whose native reminder is turned off still needs
-                # its seen-UID baseline kept current -- otherwise every event
-                # created while it was off looks "new" the moment it's turned
-                # back on. This only controls the backend's own VALARM/Google
-                # patch, not the independent HA notification below.
-                # CONF_BACKFILL_EXTERNAL_EVENTS gates patching events this
-                # poller found on its own (native "+" button, the Google/iOS
-                # app, an accepted invitation) -- opt-in, since a subentry
-                # from before this option existed has no such key stored.
-                skip_backfill = (
-                    not subentry.data.get(
-                        CONF_BACKFILL_EXTERNAL_EVENTS, DEFAULT_BACKFILL_EXTERNAL_EVENTS
+        nonlocal poll_in_progress
+        if poll_in_progress:
+            _LOGGER.debug("Skipping this poll cycle -- the previous one is still running")
+            return
+        poll_in_progress = True
+        try:
+            for entry in hass.config_entries.async_loaded_entries(DOMAIN):
+                target = entry.runtime_data
+                for subentry in list(entry.subentries.values()):
+                    method = subentry.data[CONF_DEFAULT_REMINDER_METHOD]
+                    calendar_ref = subentry.data[CONF_CALENDAR_URL]
+                    subentry_title = subentry.data[CONF_DISPLAY_NAME]
+                    # A calendar's very first poll only ever establishes the UID
+                    # baseline -- it never patches a native reminder nor sends an
+                    # HA notification, so a user adding an already-populated
+                    # calendar isn't surprised by a flood of both for years of
+                    # pre-existing events.
+                    is_first_poll = not seen_events.has_baseline(calendar_ref)
+                    # A calendar whose native reminder is turned off still needs
+                    # its seen-UID baseline kept current -- otherwise every event
+                    # created while it was off looks "new" the moment it's turned
+                    # back on. This only controls the backend's own VALARM/Google
+                    # patch, not the independent HA notification below.
+                    # CONF_BACKFILL_EXTERNAL_EVENTS gates patching events this
+                    # poller found on its own (native "+" button, the Google/iOS
+                    # app, an accepted invitation) -- opt-in, since a subentry
+                    # from before this option existed has no such key stored.
+                    skip_backfill = (
+                        not subentry.data.get(
+                            CONF_BACKFILL_EXTERNAL_EVENTS, DEFAULT_BACKFILL_EXTERNAL_EVENTS
+                        )
+                        or method == REMINDER_METHOD_NONE
+                        or is_first_poll
                     )
-                    or method == REMINDER_METHOD_NONE
-                    or is_first_poll
-                )
-                known_before = seen_events.known_uids(calendar_ref)
-                try:
-                    found: set[SeenEvent] | None = await target.async_backfill_new_events(
-                        calendar_ref,
-                        known_before,
-                        subentry.data[CONF_DEFAULT_REMINDER_MINUTES],
-                        method,
-                        _POLL_LOOKAHEAD,
-                        skip_backfill,
-                    )
-                except Exception:  # noqa: BLE001 -- one bad calendar must not block the rest
-                    _LOGGER.warning("Failed to poll %s for new events", calendar_ref, exc_info=True)
-                    continue
-                if found is None:
-                    # The calendar itself couldn't be found/reached this poll
-                    # -- don't record an empty baseline for it, or a later,
-                    # genuinely successful poll would treat every one of its
-                    # pre-existing events as brand new.
-                    continue
-                await seen_events.async_add(calendar_ref, {seen.uid for seen in found})
+                    known_before = seen_events.known_uids(calendar_ref)
+                    try:
+                        found: set[SeenEvent] | None = await target.async_backfill_new_events(
+                            calendar_ref,
+                            known_before,
+                            subentry.data[CONF_DEFAULT_REMINDER_MINUTES],
+                            method,
+                            _POLL_LOOKAHEAD,
+                            skip_backfill,
+                        )
+                    except Exception:  # noqa: BLE001 -- one bad calendar must not block the rest
+                        _log_poll_outcome(
+                            calendar_reachable,
+                            calendar_ref,
+                            subentry_title,
+                            ok=False,
+                            exc_info=True,
+                        )
+                        continue
+                    if found is None:
+                        # The calendar itself couldn't be found/reached this poll
+                        # -- don't record an empty baseline for it, or a later,
+                        # genuinely successful poll would treat every one of its
+                        # pre-existing events as brand new.
+                        _log_poll_outcome(
+                            calendar_reachable, calendar_ref, subentry_title, ok=False
+                        )
+                        continue
+                    _log_poll_outcome(calendar_reachable, calendar_ref, subentry_title, ok=True)
+                    await seen_events.async_add(calendar_ref, {seen.uid for seen in found})
 
-                # Paket A1: every real (non-marker) upcoming event gets a
-                # calendar notification if the switch is on -- regardless of
-                # `is_first_poll` (that gate is specific to the native
-                # VALARM/Google reminder backfill above, which never should
-                # retroactively patch years of pre-existing events; a bounded
-                # 48h-ahead notification isn't that flood). The scheduler's
-                # own reconciliation (decision D) handles matching against
-                # already-planned entries, the 48h window, explicit
-                # `create_event(notify)` precedence, and removing anything
-                # that no longer belongs.
-                await scheduler.async_reconcile_calendar(
-                    entry.entry_id,
-                    subentry.subentry_id,
-                    _notify_settings(subentry),
-                    [seen for seen in found if not seen.is_marker],
-                    _POLL_LOOKAHEAD,
-                    render_notify_message,
-                )
+                    # Paket A1: every real (non-marker) upcoming event gets a
+                    # calendar notification if the switch is on -- regardless of
+                    # `is_first_poll` (that gate is specific to the native
+                    # VALARM/Google reminder backfill above, which never should
+                    # retroactively patch years of pre-existing events; a bounded
+                    # 48h-ahead notification isn't that flood). The scheduler's
+                    # own reconciliation (decision D) handles matching against
+                    # already-planned entries, the 48h window, explicit
+                    # `create_event(notify)` precedence, and removing anything
+                    # that no longer belongs.
+                    await scheduler.async_reconcile_calendar(
+                        entry.entry_id,
+                        subentry.subentry_id,
+                        _notify_settings(subentry),
+                        [seen for seen in found if not seen.is_marker],
+                        _POLL_LOOKAHEAD,
+                        render_notify_message,
+                    )
+        finally:
+            # Always resets, even on an unexpected exception that escapes
+            # the per-calendar try/except above -- leaving this stuck true
+            # would silently stop the integration from ever polling again,
+            # a worse outcome than the overlap this guard exists to prevent.
+            poll_in_progress = False
 
     async_track_time_interval(hass, _async_poll_for_new_events, _POLL_INTERVAL)
     return True
@@ -401,6 +499,11 @@ async def _async_handle_entry_updated(
         if not subentry.data.get(CONF_NOTIFY_ENABLED, DEFAULT_NOTIFY_ENABLED):
             await scheduler.async_purge_subentry(entry.entry_id, subentry_id, calendar_only=True)
 
+    live_calendar_refs = _live_calendar_refs_if_ready(hass)
+    if live_calendar_refs is not None:
+        seen_events: SeenEventsTracker = hass.data[DOMAIN]["seen_events"]
+        await seen_events.async_prune_unreferenced_calendars(live_calendar_refs)
+
 
 async def async_unload_entry(hass: HomeAssistant, entry: CalendarBridgeConfigEntry) -> bool:
     """Unload a config entry.
@@ -421,8 +524,20 @@ async def async_unload_entry(hass: HomeAssistant, entry: CalendarBridgeConfigEnt
 
 
 async def async_remove_entry(hass: HomeAssistant, entry: CalendarBridgeConfigEntry) -> None:
-    """Delete this entry's reminders (R6-03); delete the whole store if it was the last entry."""
+    """Delete this entry's reminders (R6-03); delete the whole store if it was the last entry.
+
+    Also drops (or, if this was the last entry, wholly deletes) the
+    seen-events store (R4-07) -- `entry` is already gone from
+    `hass.config_entries.async_entries(DOMAIN)` by the time this runs, so
+    `_live_calendar_refs_if_ready` naturally excludes its calendars.
+    """
     scheduler: ReminderScheduler = hass.data[DOMAIN]["reminder_scheduler"]
+    seen_events: SeenEventsTracker = hass.data[DOMAIN]["seen_events"]
     await scheduler.async_remove_entry_data(entry.entry_id)
     if not hass.config_entries.async_entries(DOMAIN):
         await scheduler.async_remove_store()
+        await seen_events.async_remove_store()
+    else:
+        live_calendar_refs = _live_calendar_refs_if_ready(hass)
+        if live_calendar_refs is not None:
+            await seen_events.async_prune_unreferenced_calendars(live_calendar_refs)
