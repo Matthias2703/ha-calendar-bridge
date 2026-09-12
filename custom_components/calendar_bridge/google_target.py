@@ -555,12 +555,16 @@ class GoogleCalendarTarget:
                         (sibling.id or sibling.ical_uuid) in known_uids
                         for sibling in instances_by_master.get(master_id, [])
                     )
-                    # Known limitation: an existing sparse series whose prior
-                    # instance lies outside this search window has no visible
-                    # sibling to associate with its stored instance id. With
-                    # opt-in backfill enabled, its master can therefore be
-                    # patched once after this upgrade; Package A's typed store
-                    # model is the intended place to preserve that association.
+                    # Known limitation (B1-01): an existing sparse series whose
+                    # prior instance lies outside this search window has no
+                    # visible sibling to associate with its stored instance id.
+                    # Mostly mitigated by D1/A2's own seen-events rewrite (backfill
+                    # off by default, and the master marker recorded below is
+                    # recognized here via `known_uids` from the first poll after
+                    # this shipped) -- what remains is a series with a gap
+                    # between instances exceeding `SEEN_PRUNE_AGE` (~1 year)
+                    # while opt-in backfill is enabled, where its master could
+                    # be patched once more after the gap.
                     if master_id in known_uids or sibling_known:
                         # The series (master or some sibling instance) is
                         # already known -- a daily "nachrueckende" instance
