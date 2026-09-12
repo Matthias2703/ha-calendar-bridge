@@ -6,6 +6,7 @@ import logging
 
 from homeassistant.components.switch import SwitchEntity
 from homeassistant.config_entries import ConfigEntry, ConfigSubentry
+from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
@@ -55,6 +56,7 @@ class CalendarBridgeReminderSwitch(SwitchEntity):
     _attr_has_entity_name = True
     _attr_translation_key = "automatic_reminder"
     _attr_should_poll = False
+    _attr_entity_category = EntityCategory.CONFIG
 
     def __init__(self, entry: ConfigEntry, subentry_id: str) -> None:
         self._entry = entry
@@ -134,6 +136,7 @@ class CalendarBridgeNotifySwitch(SwitchEntity):
     _attr_has_entity_name = True
     _attr_translation_key = "notify_enabled"
     _attr_should_poll = False
+    _attr_entity_category = EntityCategory.CONFIG
 
     def __init__(self, entry: ConfigEntry, subentry_id: str) -> None:
         self._entry = entry

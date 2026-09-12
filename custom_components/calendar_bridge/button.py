@@ -6,6 +6,7 @@ import logging
 
 from homeassistant.components.button import ButtonEntity
 from homeassistant.config_entries import ConfigEntry, ConfigSubentry
+from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.device_registry import DeviceInfo
@@ -38,6 +39,9 @@ class CalendarBridgeTestNotifyButton(ButtonEntity):
     _attr_has_entity_name = True
     _attr_translation_key = "test_notify"
     _attr_should_poll = False
+    # An on-demand verification action, not a value the user configures --
+    # matches HA's own convention for e.g. "identify" buttons (R5-08).
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
 
     def __init__(self, entry: ConfigEntry, subentry_id: str) -> None:
         self._entry = entry
@@ -81,7 +85,7 @@ class CalendarBridgeTestNotifyButton(ButtonEntity):
             return
         target = subentry.data.get(CONF_NOTIFY_TARGET)
         if not target:
-            raise HomeAssistantError("No notification target configured for this calendar")
+            raise HomeAssistantError(translation_domain=DOMAIN, translation_key="no_notify_target")
         await self.hass.services.async_call(
             "notify",
             "send_message",

@@ -6,6 +6,7 @@ import logging
 
 from homeassistant.components.number import NumberEntity, NumberMode
 from homeassistant.config_entries import ConfigEntry, ConfigSubentry
+from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
@@ -47,6 +48,7 @@ class CalendarBridgeReminderMinutes(NumberEntity):
     _attr_has_entity_name = True
     _attr_translation_key = "reminder_minutes"
     _attr_should_poll = False
+    _attr_entity_category = EntityCategory.CONFIG
     _attr_native_min_value = MIN_REMINDER_MINUTES
     _attr_native_max_value = MAX_REMINDER_MINUTES
     _attr_native_step = 1
@@ -112,6 +114,7 @@ class CalendarBridgeNotifyMinutes(NumberEntity):
     _attr_has_entity_name = True
     _attr_translation_key = "notify_minutes"
     _attr_should_poll = False
+    _attr_entity_category = EntityCategory.CONFIG
     _attr_native_min_value = MIN_REMINDER_MINUTES
     _attr_native_max_value = MAX_REMINDER_MINUTES
     _attr_native_step = 1

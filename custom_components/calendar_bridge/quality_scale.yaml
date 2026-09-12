@@ -107,7 +107,13 @@ rules:
   docs-troubleshooting: todo
   docs-use-cases: done
   dynamic-devices: done
-  entity-category: done
+  entity-category:
+    status: done
+    comment: |
+      The four configuration controls (reminder/notify switches, reminder/
+      notify lead-time numbers) are EntityCategory.CONFIG; the test-notify
+      button is EntityCategory.DIAGNOSTIC (an on-demand verification
+      action, not a configured value) (R5-08).
   entity-device-class:
     status: exempt
     comment: |
@@ -119,7 +125,11 @@ rules:
       Both entities (reminder switch, reminder minutes) are core controls
       for the integration's purpose, not optional/noisy ones.
   entity-translations: done
-  exception-translations: done
+  exception-translations:
+    status: done
+    comment: |
+      Every raised HomeAssistantError/ServiceValidationError, including the
+      test-notify button's, uses translation_domain/translation_key (R5-09).
   icon-translations:
     status: todo
     comment: |

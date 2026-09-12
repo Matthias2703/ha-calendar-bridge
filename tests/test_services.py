@@ -6,6 +6,7 @@ from datetime import UTC, date, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from homeassistant.config_entries import ConfigEntryState
 from homeassistant.const import ATTR_DEVICE_ID
 from homeassistant.core import Context, ServiceCall
 from homeassistant.exceptions import ServiceValidationError
@@ -45,6 +46,9 @@ def _make_hass_and_entry(target: MagicMock) -> tuple[MagicMock, MagicMock]:
     entry = MagicMock()
     entry.subentries = {"sub1": subentry}
     entry.runtime_data = target
+    # A real ConfigEntry's `.state` is an enum, not a Mock -- every test here
+    # exercises the "normal, loaded" path unless it says otherwise (R5-02).
+    entry.state = ConfigEntryState.LOADED
     hass = MagicMock()
     return hass, entry
 
@@ -376,6 +380,86 @@ async def test_create_event_raises_calendar_unavailable_on_auth_error():
                 }
             ),
         )
+
+
+# --- R5-02: a device resolves fine (it stays in the device registry across an
+# unload), but the config entry behind it is not currently loaded -- HA
+# deletes `entry.runtime_data` entirely on a successful unload (verified
+# against the installed homeassistant.config_entries source), so dereferencing
+# it unconditionally crashes with a raw AttributeError instead of a clean,
+# translated service error.
+
+
+@pytest.mark.asyncio
+async def test_create_event_raises_a_clean_error_when_the_entry_is_not_loaded():
+    target = MagicMock()
+    hass, entry = _make_hass_and_entry(target)
+    entry.state = ConfigEntryState.NOT_LOADED
+    del entry.runtime_data  # mirrors HA's own object.__delattr__ on unload
+
+    with (
+        patch(
+            "custom_components.calendar_bridge.services.async_resolve_device",
+            return_value=(entry, "sub1"),
+        ),
+        pytest.raises(ServiceValidationError) as exc_info,
+    ):
+        await async_handle_create_event(
+            hass,
+            _call(
+                {
+                    ATTR_DEVICE_ID: [_DEVICE_ID],
+                    ATTR_SUMMARY: "Test",
+                    ATTR_START: datetime(2026, 10, 1, 9, 0, tzinfo=UTC),
+                    ATTR_ALL_DAY: False,
+                    ATTR_REMINDER_MINUTES: 30,
+                }
+            ),
+        )
+
+    assert exc_info.value.translation_key == "calendar_not_loaded"
+
+
+@pytest.mark.asyncio
+async def test_delete_event_raises_a_clean_error_when_the_entry_is_not_loaded():
+    target = MagicMock()
+    hass, entry = _make_hass_and_entry(target)
+    entry.state = ConfigEntryState.NOT_LOADED
+    del entry.runtime_data
+
+    with (
+        patch(
+            "custom_components.calendar_bridge.services.async_resolve_device",
+            return_value=(entry, "sub1"),
+        ),
+        pytest.raises(ServiceValidationError) as exc_info,
+    ):
+        await async_handle_delete_event(
+            hass, _call({ATTR_DEVICE_ID: _DEVICE_ID, ATTR_UID: "uid-1"})
+        )
+
+    assert exc_info.value.translation_key == "calendar_not_loaded"
+
+
+@pytest.mark.asyncio
+async def test_update_event_raises_a_clean_error_when_the_entry_is_not_loaded():
+    target = MagicMock()
+    hass, entry = _make_hass_and_entry(target)
+    entry.state = ConfigEntryState.NOT_LOADED
+    del entry.runtime_data
+
+    with (
+        patch(
+            "custom_components.calendar_bridge.services.async_resolve_device",
+            return_value=(entry, "sub1"),
+        ),
+        pytest.raises(ServiceValidationError) as exc_info,
+    ):
+        await async_handle_update_event(
+            hass, _call({ATTR_DEVICE_ID: _DEVICE_ID, ATTR_UID: "uid-1", ATTR_SUMMARY: "New"})
+        )
+
+    assert exc_info.value.translation_key == "calendar_not_loaded"
 
 
 @pytest.fixture
