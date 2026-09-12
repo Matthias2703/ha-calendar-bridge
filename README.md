@@ -30,7 +30,23 @@ Calendar Bridge talks directly to the Google Calendar REST API and to CalDAV (vi
 
 ## Installation
 
-Via [HACS](https://hacs.xyz/): add this repository as a custom repository (category *Integration*), then install **Calendar Bridge** and restart Home Assistant.
+This integration isn't (yet) in the default HACS store -- it can be installed as a *custom repository* instead, which is fully supported by HACS and doesn't need the default-store listing to work.
+
+### Via HACS (custom repository)
+
+1. Open **HACS** in Home Assistant.
+2. Click the **⋮** menu (top right) → **Custom repositories**.
+3. Add `https://github.com/Matthias2703/ha-calendar-bridge`, category **Integration**, then **Add**.
+4. Search for **Calendar Bridge** in HACS, open it, and click **Download**.
+5. Restart Home Assistant.
+
+### Manually (without HACS)
+
+1. Download the [latest release](https://github.com/Matthias2703/ha-calendar-bridge/releases/latest) and unzip it (or clone the repo).
+2. Copy the `custom_components/calendar_bridge` folder into your Home Assistant config's `custom_components` folder (creating that folder first if it doesn't exist yet), so you end up with `config/custom_components/calendar_bridge/...`.
+3. Restart Home Assistant.
+
+Either way, updates aren't automatic once installed as a custom repository -- HACS will show an update notification for new releases the same as it does for store integrations; a manual install needs repeating the copy step by hand.
 
 ## Configuration
 
