@@ -1,11 +1,11 @@
-"""A1-07 (Codex diff review, `review/A1-diff.md`): the previous
+"""The previous
 `test_notification_instance_keys.py` only mirrored the create-time and
 poll-time key computation side by side (`_key_at_creation`, applied twice) --
 never actually running `_backfill_new_events`, never running
 `async_reconcile_calendar`. A production change to either side's real
 normalization could drift while both mirrored calls stayed in lockstep, and
 the tests never exercised a DST transition, a moved instance, or the
-explicit single<->series carryover (A1-03).
+explicit single<->series carryover.
 
 These replace it: `create_event(notify)` via `services.py`'s own scheduling
 helper, then each backend's *real* `async_backfill_new_events` against a

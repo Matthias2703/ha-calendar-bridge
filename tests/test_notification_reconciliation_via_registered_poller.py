@@ -1,9 +1,10 @@
-"""G5 (Codex delta review, `review/A1-delta.md`, A1D-04): no test previously
+"""No test previously
 exercised the actual, registered periodic poller (`_async_poll_for_new_events`,
 registered via `async_track_time_interval` in `async_setup`) together with the
 real backend target and the real scheduler reconciliation -- only the target's
-own `async_backfill_new_events` in isolation (`test_notification_reconciliation
-_real_poll.py`, A1-07) or the scheduler in isolation. Only the external
+own `async_backfill_new_events` in isolation
+(`test_notification_reconciliation_real_poll.py`) or the scheduler in
+isolation. Only the external
 backend response (CalDAV's `build_client`, Google's `_async_service`) is
 mocked here; everything else -- the config entry, the registered poller, the
 `create_event` service, the scheduler -- is real.
@@ -12,7 +13,7 @@ Per backend: `create_event(notify)` via the real service (single event, naive
 start) -> a poll finds the explicit entry, no calendar-sourced duplicate ->
 the backend reports the event moved -> the entry follows (new `fire_at`) ->
 the backend reports it as (the first instance of) a series -> the entry is
-rekeyed onto it (A1-03/G4) -> exactly one notification is ever sent overall.
+rekeyed onto it -> exactly one notification is ever sent overall.
 """
 
 from __future__ import annotations
@@ -208,7 +209,7 @@ async def test_caldav_explicit_entry_follows_a_move_then_a_shape_change_via_the_
     assert _calendar_entries(scheduler) == []
 
     # 4. The backend now reports it as (the first instance of) a series --
-    # rekeyed (A1-03/G4), not discarded or duplicated.
+    # rekeyed, not discarded or duplicated.
     mock_calendar.date_search.return_value = [
         _mock_event(_vevent(uid, "Standup", moved_start, recurrence_id=moved_start))
     ]

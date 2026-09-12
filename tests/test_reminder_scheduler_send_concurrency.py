@@ -3,7 +3,7 @@ timeout) must not stall every other calendar's reconciliation or an
 unrelated `create_event(notify)` call -- only the one entry actually being
 sent should be affected.
 
-Since N5, `async_schedule_explicit`/`async_reconcile_calendar` never await a
+`async_schedule_explicit`/`async_reconcile_calendar` never await a
 notify call at all: `_apply` only claims a due entry under `self._lock`, and
 the real send happens in `_deliver`, spawned as an independent background
 task once the lock is released. So neither call here ever blocks on the
@@ -155,12 +155,12 @@ def _calendar_subentry(calendar_ref: str, notify_target: str) -> dict:
 async def test_overlapping_reconciliations_of_the_same_calendar_never_duplicate_a_send(
     hass: HomeAssistant, enable_custom_integrations: None
 ) -> None:
-    # N5 reproduction (a): two overlapping `async_reconcile_calendar` calls
+    # reproduction (a): two overlapping `async_reconcile_calendar` calls
     # for the *same* calendar used to leave a slow send's own reconciliation
     # still mid-loop when a second one raced in and re-created/re-sent an
     # entry the first hadn't gotten to appending yet -- because the lock was
     # released around the notify call, right in the middle of the decision
-    # loop. Since N5 the lock covers the whole decide-and-claim section, so
+    # loop. Since the lock covers the whole decide-and-claim section, so
     # a second call can't even start until the first's is fully done.
     assert await async_setup_component(hass, DOMAIN, {})
     await hass.async_block_till_done()
@@ -214,7 +214,7 @@ async def test_overlapping_reconciliations_of_the_same_calendar_never_duplicate_
 async def test_a_switch_off_during_an_in_flight_send_leaves_no_calendar_entries_behind(
     hass: HomeAssistant, enable_custom_integrations: None
 ) -> None:
-    # N5 reproduction (b): `async_purge_subentry(calendar_only=True)` (the
+    # reproduction (b): `async_purge_subentry(calendar_only=True)` (the
     # notify switch turning off) racing a send in flight used to leave the
     # store non-empty again once the in-flight send resumed and wrote itself
     # back, even though the switch-off should have removed it outright.
@@ -258,12 +258,12 @@ async def test_a_switch_off_during_an_in_flight_send_leaves_no_calendar_entries_
 async def test_a_config_entry_removal_during_an_in_flight_send_leaves_no_store_file(
     hass: HomeAssistant, enable_custom_integrations: None, hass_storage: dict
 ) -> None:
-    # N5 reproduction (c): `async_remove_entry_data` + `async_remove_store`
+    # reproduction (c): `async_remove_entry_data` + `async_remove_store`
     # racing a send in flight used to still get a fresh store file written
     # back (with the removed entry's own data) once the in-flight send
     # resumed -- via the real `hass.config_entries.async_remove` path, not
     # the scheduler's methods called directly, since that's what actually
-    # drives entry removal in production (R6-03).
+    # drives entry removal in production.
     entry = _make_caldav_entry(_calendar_subentry(_CAL1, "notify.phone"))
     entry.add_to_hass(hass)
     assert await hass.config_entries.async_setup(entry.entry_id)
@@ -309,11 +309,11 @@ async def test_a_config_entry_removal_during_an_in_flight_send_leaves_no_store_f
 async def test_cancelling_an_in_flight_delivery_task_leaves_the_scheduler_usable(
     hass: HomeAssistant, enable_custom_integrations: None
 ) -> None:
-    # N5 reproduction (d): a task cancelled while it awaited re-acquiring
+    # reproduction (d): a task cancelled while it awaited re-acquiring
     # `self._lock` (inside the old, manual `release()`/`acquire()` pair in
     # `_send_now`) could leave the lock held by nobody -- or another task's
     # own `async with self._lock:` would then release a lock it never
-    # acquired, raising `RuntimeError: Lock is not acquired.`. Since N5,
+    # acquired, raising `RuntimeError: Lock is not acquired.`. Now,
     # `_deliver` only ever touches the lock via `async with`, so cancelling
     # it mid-flight must leave the scheduler in a perfectly ordinary,
     # reusable state.

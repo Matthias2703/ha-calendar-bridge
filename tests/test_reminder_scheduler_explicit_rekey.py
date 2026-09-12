@@ -1,4 +1,4 @@
-"""A1-03 (Codex diff review, `review/A1-diff.md`): an explicit
+"""An explicit
 `create_event(notify)` entry must survive its own event's instance-key shape
 changing (a single event recognized as (the first instance of) a series, or
 the reverse) -- the key-change carryover in `_reconcile_calendar_entries`

@@ -95,7 +95,7 @@ def test_resolve_subentry_title_falls_back_when_no_subentry_matches_the_ref(
 
 
 def test_cv_datetime_parses_a_bare_date_string_as_a_midnight_datetime() -> None:
-    # (q) The `occurrence` field on delete_event/update_event uses cv.datetime
+    # The `occurrence` field on delete_event/update_event uses cv.datetime
     # (services.py:108,116) -- a bare "YYYY-MM-DD" input becomes a midnight
     # *datetime*, never a plain `date`. Both backends' occurrence-matching
     # must account for this when the original instance itself is all-day.
@@ -115,7 +115,7 @@ def europe_berlin_timezone():
 def test_occurrence_matches_tz_aware_occurrence_near_midnight_uses_ha_timezone(
     europe_berlin_timezone,
 ) -> None:
-    # (B2-06) Documents existing behavior: a tz-aware `occurrence` is compared
+    # Documents existing behavior: a tz-aware `occurrence` is compared
     # by its date in HA's own configured timezone, not its own -- 23:30 on
     # 2026-10-03 in America/Los_Angeles is already 2026-10-04 in the
     # HA-configured Europe/Berlin.

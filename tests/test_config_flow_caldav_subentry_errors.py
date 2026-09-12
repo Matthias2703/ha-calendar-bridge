@@ -1,4 +1,4 @@
-"""R5-03: adding a CalDAV calendar to an existing account must not crash on a
+"""Adding a CalDAV calendar to an existing account must not crash on a
 connection/auth failure -- the Google branch already catches its own
 equivalent exceptions and aborts cleanly; the CalDAV branch didn't.
 """

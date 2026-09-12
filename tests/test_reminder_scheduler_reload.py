@@ -104,7 +104,7 @@ async def test_a_pending_explicit_reminder_still_fires_after_a_config_entry_relo
     async_fire_time_changed(hass, fire_at + timedelta(seconds=1))
     # The actual send happens in a `_deliver` background task, spawned once
     # `_apply` claims the entry -- `wait_background_tasks=True` is needed to
-    # wait for it too, not just the regular tasks HA already tracks (N5).
+    # wait for it too, not just the regular tasks HA already tracks.
     await hass.async_block_till_done(wait_background_tasks=True)
 
     send_mock.assert_called_once()

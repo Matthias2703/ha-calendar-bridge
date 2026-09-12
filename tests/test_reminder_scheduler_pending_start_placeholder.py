@@ -1,4 +1,4 @@
-"""G2 (Codex delta review, `review/A1-delta.md`, R2): with HA already
+"""With HA already
 `running` by the time `_async_send_when_started` is called, `async_at_started`
 (HA 2026.3.4 `helpers/start.py:34-36`, eager coroutine jobs per `core.py:720`)
 runs its callback immediately, *before* returning a cancel handle. `_send`

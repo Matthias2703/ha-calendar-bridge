@@ -1,16 +1,16 @@
-"""B1/A1: orchestration tests for series-aware polling and notification scheduling.
+"""Orchestration tests for series-aware polling and notification scheduling.
 
 Uses the real hass fixture (explicit enable_custom_integrations, not autouse)
 because the behavior spans config-entry setup, the periodic poller, the
 persisted seen-events baseline, and the reminder scheduler -- the same style
 as `test_backfill_opt_in.py`.
 
-Paket A1 replaced the old "only genuinely new events get a notification,
+This replaced the old "only genuinely new events get a notification,
 migrating/known events are suppressed" model with: every real (non-marker)
-upcoming event gets notified, gated only by the 48h planning window
-(decision 1, decision 2, decision C) -- these tests assert that model
-directly against `scheduler._data["reminders"]`, since the old
-`scheduler.async_schedule` spy point no longer exists.
+upcoming event gets notified, gated only by the 48h planning window --
+these tests assert that model directly against
+`scheduler._data["reminders"]`, since the old `scheduler.async_schedule` spy
+point no longer exists.
 """
 
 from __future__ import annotations
@@ -160,7 +160,7 @@ async def test_k_caldav_migrating_series_still_gets_notified(
 async def test_l_caldav_event_beyond_planning_window_is_not_yet_stored(
     hass: HomeAssistant, enable_custom_integrations: None, freezer, hass_storage: dict
 ) -> None:
-    # Decision 2/D: a real (already-known) event whose fire time is still
+    # a real (already-known) event whose fire time is still
     # more than 48h out is not planned/stored yet -- every poll
     # re-evaluates, so it appears the moment it comes within the window,
     # without needing to look "new" to the seen-UID baseline.
@@ -219,7 +219,7 @@ async def test_o_google_series_notifies_each_instance_never_the_marker(
 ) -> None:
     # Decision C: each of a series' real instances gets its own stored
     # notification; the series-master baseline marker (`is_marker=True`)
-    # must never itself produce one. Decision 5: reconciliation is not
+    # must never itself produce one. Reconciliation is not
     # gated by `is_first_poll` -- a single poll is enough.
     entry = _make_caldav_entry_with_notify()
     entry.add_to_hass(hass)

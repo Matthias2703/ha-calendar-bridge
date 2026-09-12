@@ -1,10 +1,10 @@
-"""A1-05 (Codex diff review, `review/A1-diff.md`): `async_unload_entry`
+"""`async_unload_entry`
 unsubscribed the scheduler's in-memory timers for an entry before knowing
 whether `hass.config_entries.async_unload_platforms` actually succeeded --
 on a `False` result (HA leaves the entry in `FAILED_UNLOAD`, still present
 and still polled), the timer is simply gone and, for a reminder far enough
-out that the next poll's own reconciliation won't recreate it (Decision 2's
-"missing from this poll" only re-plans an entry inside the poll's own
+out that the next poll's own reconciliation won't recreate it (only an entry
+"missing from this poll" gets re-planned, and only inside the poll's own
 lookahead), the notification is silently lost.
 
 Uses the real hass fixture because the behavior spans the actual
@@ -78,7 +78,7 @@ async def test_a_failed_platform_unload_leaves_the_reminders_timer_live(
     subentry_id = next(iter(entry.subentries))
     # 400 days out -- beyond the poller's own 365-day lookahead, so a poll
     # after the timer is (wrongly) unsubscribed would never replan it either
-    # (matching A1-05's own scenario).
+    # (matching this scenario).
     fire_at = dt_util.utcnow() + timedelta(days=400)
     await scheduler.async_schedule_explicit(
         entry.entry_id, subentry_id, "evt-1", "evt-1", "notify.phone", 0, "msg", fire_at

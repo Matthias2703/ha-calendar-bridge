@@ -1,4 +1,4 @@
-"""A2/R4-07: the seen-events store gains a per-UID last-seen date (schema v2)
+"""The seen-events store gains a per-UID last-seen date (schema v2)
 so stale UIDs can be pruned instead of growing forever, while a v1->v2
 migration and a same-day no-write optimization keep existing behavior intact.
 """

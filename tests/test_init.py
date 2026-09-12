@@ -96,7 +96,7 @@ async def _fire_create_event(hass: HomeAssistant, service_data: dict) -> AsyncMo
 async def test_reactive_listener_start_date_gives_a_date_not_datetime(
     hass: HomeAssistant, enable_custom_integrations: None
 ) -> None:
-    # (t) The key present (start_date vs start_date_time) must decide the
+    # The key present (start_date vs start_date_time) must decide the
     # value type -- not a "try datetime, then date" parse order, which would
     # turn a bare "2026-10-03" into midnight instead of a plain date.
     mock_target = await _fire_create_event(
@@ -117,7 +117,7 @@ async def test_reactive_listener_dry_run_check_failure_never_logs_the_calendar_u
     # A failing per-calendar dry-run check (__init__.py's own reactive
     # backfill listener) already has the subentry object in hand -- no
     # lookup needed, so it must log the display title, never the raw
-    # calendar_url (privacy fix, same treatment as R5-07's poll logging).
+    # calendar_url (privacy fix, same treatment as poll logging).
     entry = _make_minimal_caldav_entry()
     entry.add_to_hass(hass)
     assert await hass.config_entries.async_setup(entry.entry_id)
@@ -163,7 +163,7 @@ async def test_reactive_listener_start_date_time_gives_a_datetime(
 async def test_reactive_listener_date_object_under_start_date_time_is_ignored_not_raised(
     hass: HomeAssistant, enable_custom_integrations: None
 ) -> None:
-    # (B2-03) EVENT_CALL_SERVICE carries the caller's raw, pre-schema-validated
+    # EVENT_CALL_SERVICE carries the caller's raw, pre-schema-validated
     # service_data -- a `date` object (not a string, not a `datetime`) under
     # start_date_time is a type the key doesn't expect. This must be treated
     # like "no usable start" (skip, no backfill), never raise out of the
@@ -179,7 +179,7 @@ async def test_reactive_listener_date_object_under_start_date_time_is_ignored_no
 async def test_reactive_listener_datetime_object_under_start_date_gives_a_date(
     hass: HomeAssistant, enable_custom_integrations: None
 ) -> None:
-    # (B2-04) A `datetime` object under start_date must still be normalized
+    # A `datetime` object under start_date must still be normalized
     # to a plain `date` -- `isinstance(x, date)` alone is true for a
     # `datetime` too (it's a subclass), which would otherwise let a
     # `datetime` through unchanged under this key.
@@ -221,7 +221,7 @@ async def _reconcile_one(
 ) -> dict:
     """Run `async_reconcile_calendar` for one real event and return its stored entry.
 
-    This is Paket A1's production call site for a calendar-sourced
+    This is the production call site for a calendar-sourced
     notification (`__init__.py`'s poller) -- the old, now-deleted
     `_async_schedule_ha_notification` helper this file used to exercise
     directly was folded into `ReminderScheduler.async_reconcile_calendar`.
@@ -300,7 +300,7 @@ def europe_berlin_timezone():
 
 @pytest.mark.asyncio
 async def test_all_day_notification_survives_dst_spring_forward(europe_berlin_timezone, freezer):
-    # (j) Paket C, poller path (`ReminderScheduler.async_reconcile_calendar`
+    # poller path (`ReminderScheduler.async_reconcile_calendar`
     # is the production call site for a calendar-sourced notification): a
     # 2-nominal-day lead time crossing the 2026-03-29 spring-forward must
     # still fire at 09:00 *local* on 2026-03-28 (08:00Z) -- computing

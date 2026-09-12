@@ -1,4 +1,4 @@
-"""A2/R4-07: pruning removes only stale UIDs, never a whole calendar's known
+"""Pruning removes only stale UIDs, never a whole calendar's known
 set at once -- so a recurring series stays "known" (never re-triggers the
 native-reminder backfill for one of its instances) as long as *any* of its
 related identities (the bare/master UID, or a sibling instance key) is still
@@ -55,8 +55,8 @@ async def test_caldav_a_series_known_via_its_bare_uid_is_not_rebackfilled(
     mock_calendar.date_search.return_value = [mock_event]
 
     # The bare series UID survived pruning (seen recently); this exact
-    # instance key was never seen before -- the old A1-03/pre-B1 "migrating
-    # bare UID" recognition path.
+    # instance key was never seen before -- the old "migrating bare UID"
+    # recognition path.
     known_uids = {uid}
 
     with patch(

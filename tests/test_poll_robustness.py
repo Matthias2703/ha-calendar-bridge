@@ -1,4 +1,4 @@
-"""A2: overlapping poll guard (R4-08) and per-calendar log throttling (R5-07).
+"""Overlapping poll guard and per-calendar log throttling.
 
 Uses the real hass fixture with the real registered poller
 (`_async_poll_for_new_events`, via `async_track_time_interval`) -- these

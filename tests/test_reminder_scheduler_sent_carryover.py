@@ -162,7 +162,7 @@ def _make_scheduler() -> ReminderScheduler:
     hass = MagicMock()
     hass.services.async_call = AsyncMock()
     # A `_deliver` send is spawned via `hass.async_create_background_task`
-    # (N5) rather than awaited synchronously -- a bare `MagicMock()` would
+    # rather than awaited synchronously -- a bare `MagicMock()` would
     # silently drop the coroutine instead of running it, so this wires it up
     # to actually schedule a real task and keeps track of it for the test to
     # await (`_drain`) once each reconciliation call returns.

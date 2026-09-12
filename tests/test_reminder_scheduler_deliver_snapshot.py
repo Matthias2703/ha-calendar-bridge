@@ -1,4 +1,4 @@
-"""G6 (Codex delta review, `review/A1-delta.md`, A1D-03): hardening, not a
+"""hardening, not a
 production bug -- HA's real background-task creation runs eager (`core.py`),
 so no scheduling gap actually exists between `_spawn_delivery`'s claim and
 `_deliver`'s first line running. But `_deliver` read `reminder["target"]`/

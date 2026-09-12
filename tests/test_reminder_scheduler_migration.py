@@ -54,7 +54,7 @@ async def test_v1_store_is_discarded_and_flagged_migrated(
 
     warnings = [r.getMessage() for r in caplog.records if r.levelname == "WARNING"]
     assert any("1" in m and "discard" in m.lower() for m in warnings)
-    # R6-03: never repeat a discarded reminder's own target/message content.
+    # never repeat a discarded reminder's own target/message content.
     assert not any("notify.phone" in m or "secret dosage" in m for m in warnings)
 
 
@@ -122,7 +122,7 @@ async def test_first_reconciliation_after_migration_adopts_overdue_as_sent_witho
         )
     # The actual send happens in a `_deliver` background task, spawned once
     # `_apply` claims the entry -- `wait_background_tasks=True` is needed to
-    # wait for it too, not just the regular tasks HA already tracks (N5).
+    # wait for it too, not just the regular tasks HA already tracks.
     await hass.async_block_till_done(wait_background_tasks=True)
 
     send_mock.assert_called_once()

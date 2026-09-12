@@ -1,5 +1,5 @@
-"""G1 (Codex delta review, `review/A1-delta.md`, R1): a stale write-back that
-recognizes it lost the race (F1/A1-02) must still redeliver a still-due entry
+"""A stale write-back that
+recognizes it lost the race must still redeliver a still-due entry
 right away -- not just leave it for a poll that may be minutes off.
 
 `_finish_delivery`'s stale-revision branch already calls
@@ -62,7 +62,7 @@ async def test_a_stale_write_back_redelivers_a_still_due_entry_without_waiting_f
 
     # The poll moves the same event 5 minutes later while the old delivery is
     # still blocked -- the new fire_at (minutes_before=90 against an event
-    # ~6 minutes out) is still overdue right now, unlike F1's own test (moved
+    # ~6 minutes out) is still overdue right now, unlike a different test (moved
     # 6 hours out, into the future).
     new_start = old_start + timedelta(minutes=5)
     moved = SeenEvent(
