@@ -2807,4 +2807,3 @@ async def test_find_event_by_uid_url_mismatched_uid_returns_none():
         deleted = await target.async_delete_event(calendar_ref, "evt-uid-1")
 
     assert deleted is False
-

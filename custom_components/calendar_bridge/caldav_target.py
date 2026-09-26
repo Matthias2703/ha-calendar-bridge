@@ -269,7 +269,7 @@ class CalDavCalendarTarget:
         if event_url is not None:
             try:
                 return calendar.event_by_url(event_url)
-            except (caldav.lib.error.NotFoundError, caldav.lib.error.DAVError):
+            except caldav.lib.error.NotFoundError, caldav.lib.error.DAVError:
                 pass
 
         if calendar.url is None:
@@ -286,7 +286,7 @@ class CalDavCalendarTarget:
 
         try:
             event = calendar.event_by_url(candidate_url)
-        except (caldav.lib.error.NotFoundError, caldav.lib.error.DAVError):
+        except caldav.lib.error.NotFoundError, caldav.lib.error.DAVError:
             return None
 
         try:
