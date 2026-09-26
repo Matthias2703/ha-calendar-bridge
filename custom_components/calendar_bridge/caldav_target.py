@@ -12,6 +12,7 @@ import uuid
 from collections.abc import Callable
 from datetime import UTC, date, datetime, timedelta
 from typing import TYPE_CHECKING, Any, TypeVar
+from urllib.parse import quote
 
 import caldav
 import icalendar
@@ -231,6 +232,76 @@ class CalDavCalendarTarget:
             raise CalendarNotFoundError(calendar_ref)
         calendar.save_event(ical_text)
 
+    def _find_event_by_uid(
+        self,
+        calendar: caldav.Calendar,
+        uid: str,
+        *,
+        event_url: Any | None = None,
+    ) -> Any | None:
+        """Find an event on `calendar` by its UID, compatible with iCloud and non-standard servers.
+
+        Standard `calendar.event_by_uid(uid)` sends a `calendar-query` REPORT
+        filtering by UID (`C:prop-filter name="UID"`), which iCloud rejects with
+        `412 Precondition Failed` (and python-caldav's fallback search then crashes
+        with `TypeError: Calendar.search() got multiple values for argument 'sort_keys'`).
+
+        1. Primary lookup: standard calendar.event_by_uid(uid).
+        2. Fallback for servers (like iCloud) that reject calendar-query REPORT on UID:
+           If a known event URL is provided (e.g. from poll / backfill search), try that.
+        3. Fallback to loading the event directly by its canonical URL:
+           `{calendar.url}/{uid}.ics` (how events created via Calendar Bridge are stored).
+        """
+        # 1. Primary lookup: standard calendar.event_by_uid(uid).
+        try:
+            return calendar.event_by_uid(uid)
+        except caldav.lib.error.NotFoundError:
+            return None
+        except (caldav.lib.error.ReportError, caldav.lib.error.DAVError, TypeError) as err:
+            _LOGGER.debug(
+                "calendar.event_by_uid failed for %s (%s), attempting direct URL fallback",
+                uid,
+                err,
+            )
+
+        # 2. Fallback for servers (like iCloud) that reject calendar-query REPORT on UID:
+        # If a known event URL is provided (e.g. from poll / backfill search), try that.
+        if event_url is not None:
+            try:
+                return calendar.event_by_url(event_url)
+            except (caldav.lib.error.NotFoundError, caldav.lib.error.DAVError):
+                pass
+
+        if calendar.url is None:
+            return None
+
+        # 3. Fallback to canonical PUT location: {calendar.url}/{uid}.ics
+        filename = f"{quote(uid.replace('/', '%2F'))}.ics"
+        if isinstance(calendar.url, str):
+            candidate_url = f"{calendar.url.rstrip('/')}/{filename}"
+        elif hasattr(calendar.url, "join"):
+            candidate_url = str(calendar.url.join(filename))
+        else:
+            candidate_url = f"{str(calendar.url).rstrip('/')}/{filename}"
+
+        try:
+            event = calendar.event_by_url(candidate_url)
+        except (caldav.lib.error.NotFoundError, caldav.lib.error.DAVError):
+            return None
+
+        try:
+            component = event.icalendar_component
+            if component.get("uid") == uid:
+                return event
+            instance = event.icalendar_instance
+            for subcomp in instance.subcomponents:
+                if subcomp.get("uid") == uid:
+                    return event
+        except Exception:  # noqa: BLE001
+            pass
+
+        return None
+
     async def async_backfill_reminder(
         self,
         calendar_ref: str,
@@ -305,9 +376,10 @@ class CalDavCalendarTarget:
             # flattened, RRULE-less copy -- mutating and saving *that* object
             # would permanently destroy the series on the server. Re-fetch
             # the real, unexpanded event before writing anything.
-            try:
-                real_event = calendar.event_by_uid(uid)
-            except caldav.lib.error.NotFoundError:
+            real_event = self._find_event_by_uid(
+                calendar, uid, event_url=getattr(event, "url", None)
+            )
+            if real_event is None:
                 continue
             instance_calendar = real_event.icalendar_instance
             master = (
@@ -466,9 +538,10 @@ class CalDavCalendarTarget:
                 # Re-fetch the real, unexpanded event before mutating/saving
                 # -- see `_backfill_reminder` for why `date_search`'s own
                 # (expanded) result object must never be saved back.
-                try:
-                    real_event = calendar.event_by_uid(uid)
-                except caldav.lib.error.NotFoundError:
+                real_event = self._find_event_by_uid(
+                    calendar, uid, event_url=getattr(event, "url", None)
+                )
+                if real_event is None:
                     continue
                 instance_calendar = real_event.icalendar_instance
                 master = self._find_master_component(instance_calendar)
@@ -516,9 +589,8 @@ class CalDavCalendarTarget:
         calendar = self._find_calendar(client, calendar_ref)
         if calendar is None:
             return False
-        try:
-            event = calendar.event_by_uid(uid)
-        except caldav.lib.error.NotFoundError:
+        event = self._find_event_by_uid(calendar, uid)
+        if event is None:
             return False
 
         if occurrence is None:
@@ -591,9 +663,8 @@ class CalDavCalendarTarget:
         calendar = self._find_calendar(client, calendar_ref)
         if calendar is None:
             return False
-        try:
-            event = calendar.event_by_uid(uid)
-        except caldav.lib.error.NotFoundError:
+        event = self._find_event_by_uid(calendar, uid)
+        if event is None:
             return False
 
         if occurrence is None:

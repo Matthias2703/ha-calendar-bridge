@@ -2691,3 +2691,120 @@ async def test_delete_event_occurrence_save_failure_never_logs_the_calendar_url(
     assert deleted is False
     assert _LEAK_CAL not in caplog.text
     assert "Home" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_delete_event_icloud_412_report_error_falls_back_to_direct_url():
+    """iCloud rejects calendar-query on UID with 412; direct URL fallback succeeds."""
+    target = _make_target()
+    calendar_ref = "https://example.test/cal/"
+    mock_client, mock_calendar = _mock_client_with_calendar(calendar_ref)
+    mock_calendar.event_by_uid.side_effect = caldav.lib.error.ReportError(
+        "ReportError at '412 Precondition Failed'"
+    )
+    mock_event = _mock_uid_event("Dentist", datetime(2026, 10, 1, 9, 0, tzinfo=UTC))
+    mock_calendar.event_by_url.return_value = mock_event
+
+    with patch(
+        "custom_components.calendar_bridge.caldav_target.build_client", return_value=mock_client
+    ):
+        deleted = await target.async_delete_event(calendar_ref, "evt-uid-1")
+
+    assert deleted is True
+    mock_calendar.event_by_uid.assert_called_once_with("evt-uid-1")
+    mock_calendar.event_by_url.assert_called_once_with("https://example.test/cal/evt-uid-1.ics")
+    mock_event.delete.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_delete_event_icloud_python_caldav_type_error_falls_back_to_direct_url():
+    """python-caldav's flawed 412 fallback raises TypeError; direct URL fallback succeeds."""
+    target = _make_target()
+    calendar_ref = "https://example.test/cal/"
+    mock_client, mock_calendar = _mock_client_with_calendar(calendar_ref)
+    mock_calendar.event_by_uid.side_effect = TypeError(
+        "Calendar.search() got multiple values for argument 'sort_keys'"
+    )
+    mock_event = _mock_uid_event("Dentist", datetime(2026, 10, 1, 9, 0, tzinfo=UTC))
+    mock_calendar.event_by_url.return_value = mock_event
+
+    with patch(
+        "custom_components.calendar_bridge.caldav_target.build_client", return_value=mock_client
+    ):
+        deleted = await target.async_delete_event(calendar_ref, "evt-uid-1")
+
+    assert deleted is True
+    mock_calendar.event_by_uid.assert_called_once_with("evt-uid-1")
+    mock_calendar.event_by_url.assert_called_once_with("https://example.test/cal/evt-uid-1.ics")
+    mock_event.delete.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_delete_event_icloud_412_and_direct_url_404_returns_false():
+    """When event_by_uid fails with 412 and direct URL gives 404, delete_event returns False."""
+    target = _make_target()
+    calendar_ref = "https://example.test/cal/"
+    mock_client, mock_calendar = _mock_client_with_calendar(calendar_ref)
+    mock_calendar.event_by_uid.side_effect = caldav.lib.error.ReportError(
+        "ReportError at '412 Precondition Failed'"
+    )
+    mock_calendar.event_by_url.side_effect = caldav.lib.error.NotFoundError("Not found")
+
+    with patch(
+        "custom_components.calendar_bridge.caldav_target.build_client", return_value=mock_client
+    ):
+        deleted = await target.async_delete_event(calendar_ref, "evt-uid-1")
+
+    assert deleted is False
+    mock_calendar.event_by_uid.assert_called_once_with("evt-uid-1")
+    mock_calendar.event_by_url.assert_called_once_with("https://example.test/cal/evt-uid-1.ics")
+
+
+@pytest.mark.asyncio
+async def test_update_event_icloud_412_report_error_falls_back_to_direct_url():
+    """update_event also succeeds on iCloud via direct URL fallback when event_by_uid gives 412."""
+    target = _make_target()
+    calendar_ref = "https://example.test/cal/"
+    mock_client, mock_calendar = _mock_client_with_calendar(calendar_ref)
+    mock_calendar.event_by_uid.side_effect = caldav.lib.error.ReportError(
+        "ReportError at '412 Precondition Failed'"
+    )
+    mock_event = _mock_uid_event_in_calendar("Dentist", datetime(2026, 10, 1, 9, 0, tzinfo=UTC))
+    mock_calendar.event_by_url.return_value = mock_event
+
+    with patch(
+        "custom_components.calendar_bridge.caldav_target.build_client", return_value=mock_client
+    ):
+        updated = await target.async_update_event(
+            calendar_ref, "evt-uid-1", EventUpdate(summary="Orthodontist")
+        )
+
+    assert updated is True
+    mock_calendar.event_by_uid.assert_called_once_with("evt-uid-1")
+    mock_calendar.event_by_url.assert_called_once_with("https://example.test/cal/evt-uid-1.ics")
+    mock_event.save.assert_called_once()
+    assert str(mock_event.icalendar_component["summary"]) == "Orthodontist"
+
+
+@pytest.mark.asyncio
+async def test_find_event_by_uid_url_mismatched_uid_returns_none():
+    """If candidate URL returns an event whose UID does not match, _find_event_by_uid rejects it."""
+    target = _make_target()
+    calendar_ref = "https://example.test/cal/"
+    mock_client, mock_calendar = _mock_client_with_calendar(calendar_ref)
+    mock_calendar.event_by_uid.side_effect = caldav.lib.error.ReportError(
+        "ReportError at '412 Precondition Failed'"
+    )
+    mock_event = _mock_uid_event("Wrong", datetime(2026, 10, 1, 9, 0, tzinfo=UTC))
+    mock_event.icalendar_component.pop("uid")
+    mock_event.icalendar_component.add("uid", "different-uid")
+    mock_event.icalendar_instance = None
+    mock_calendar.event_by_url.return_value = mock_event
+
+    with patch(
+        "custom_components.calendar_bridge.caldav_target.build_client", return_value=mock_client
+    ):
+        deleted = await target.async_delete_event(calendar_ref, "evt-uid-1")
+
+    assert deleted is False
+
