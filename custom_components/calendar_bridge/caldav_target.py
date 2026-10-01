@@ -14,7 +14,9 @@ from datetime import UTC, date, datetime, timedelta
 from typing import TYPE_CHECKING, Any, TypeVar
 from urllib.parse import quote
 
-import caldav
+import caldav.lib.error
+from caldav.collection import Calendar
+from caldav.davclient import DAVClient
 import icalendar
 import recurring_ical_events
 from homeassistant.util import dt as dt_util
@@ -55,9 +57,9 @@ class CalDavConnectionError(Exception):
     """Raised when the CalDAV server can't be reached at all."""
 
 
-def build_client(url: str, username: str, password: str, verify_ssl: bool) -> caldav.DAVClient:
+def build_client(url: str, username: str, password: str, verify_ssl: bool) -> DAVClient:
     """Build a (not-yet-connected) CalDAV client."""
-    return caldav.DAVClient(
+    return DAVClient(
         url=url, username=username, password=password, ssl_verify_cert=verify_ssl
     )
 
@@ -108,7 +110,7 @@ def _is_series_related(master: icalendar.Event) -> bool:
     return bool(master.get("rrule") or master.get("rdate") or master.get("recurrence-id"))
 
 
-def discover_calendars(client: caldav.DAVClient) -> list[caldav.Calendar]:
+def discover_calendars(client: DAVClient) -> list[Calendar]:
     """Connect and return the account's calendars. Blocking — run via the executor."""
     try:
         # caldav ships no type stubs, so its own methods are untyped.
@@ -212,7 +214,7 @@ class CalDavCalendarTarget:
         await self._async_run(self._save_event, calendar_ref, ical_text)
         return uid
 
-    def _find_calendar(self, client: caldav.DAVClient, calendar_ref: str) -> caldav.Calendar | None:
+    def _find_calendar(self, client: DAVClient, calendar_ref: str) -> Calendar | None:
         """Find calendar_ref among this client's calendars, or None if absent.
 
         Raises `CalDavAuthError`/`CalDavConnectionError` (via
@@ -234,7 +236,7 @@ class CalDavCalendarTarget:
 
     def _find_event_by_uid(
         self,
-        calendar: caldav.Calendar,
+        calendar: Calendar,
         uid: str,
         *,
         event_url: Any | None = None,
