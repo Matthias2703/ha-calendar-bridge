@@ -1,8 +1,8 @@
 pytest-homeassistant-custom-component==0.13.320
 icalendar==6.3.1
-caldav==2.1.0
+caldav==3.3.0a1
 recurring-ical-events==3.8.2
-gcal-sync==9.1.1
+gcal-sync==9.2.0
 types-icalendar==6.3.1.20250914
 ruff==0.16.7
 mypy==2.3.1

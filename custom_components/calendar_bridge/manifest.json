@@ -10,9 +10,9 @@
   "issue_tracker": "https://github.com/Matthias2703/ha-calendar-bridge/issues",
   "requirements": [
     "icalendar==6.3.1",
-    "caldav==2.1.0",
+    "caldav==3.3.0a1",
     "recurring-ical-events==3.8.2",
-    "gcal-sync==9.1.1"
+    "gcal-sync==9.2.0"
   ],
   "version": "0.4.2"
 }
