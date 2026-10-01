@@ -12,8 +12,8 @@ import logging
 from collections.abc import Mapping
 from typing import Any
 
-import caldav
 import voluptuous as vol
+from caldav.collection import Calendar
 from gcal_sync.exceptions import ApiException
 from gcal_sync.model import Calendar as GoogleCalendar
 from homeassistant.config_entries import (
@@ -134,7 +134,7 @@ def _reminder_defaults_schema(
     }
 
 
-def _calendar_choices(calendars: list[caldav.Calendar]) -> dict[str, str]:
+def _calendar_choices(calendars: list[Calendar]) -> dict[str, str]:
     return {str(cal.url): (cal.name or str(cal.url)) for cal in calendars}
 
 
@@ -152,7 +152,7 @@ class CalendarBridgeConfigFlow(ConfigFlow, domain=DOMAIN):
 
     def __init__(self) -> None:
         self._caldav_data: dict[str, Any] = {}
-        self._caldav_calendars: list[caldav.Calendar] = []
+        self._caldav_calendars: list[Calendar] = []
         self._last_test_error: str | None = None
         self._google_entry_id: str | None = None
         self._google_calendars: list[GoogleCalendar] = []
@@ -442,7 +442,7 @@ class CalendarSubentryFlow(ConfigSubentryFlow):
     """Add another calendar to an existing account, or edit one's defaults."""
 
     def __init__(self) -> None:
-        self._calendars: list[caldav.Calendar] = []
+        self._calendars: list[Calendar] = []
         self._google_calendars: list[GoogleCalendar] = []
 
     async def async_step_user(self, user_input: dict[str, Any] | None = None) -> SubentryFlowResult:
