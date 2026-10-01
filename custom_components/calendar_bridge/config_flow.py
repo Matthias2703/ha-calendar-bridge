@@ -12,10 +12,8 @@ import logging
 from collections.abc import Mapping
 from typing import Any
 
-import caldav.lib.error
-from caldav.collection import Calendar
-from caldav.davclient import DAVClient
 import voluptuous as vol
+from caldav.collection import Calendar
 from gcal_sync.exceptions import ApiException
 from gcal_sync.model import Calendar as GoogleCalendar
 from homeassistant.config_entries import (

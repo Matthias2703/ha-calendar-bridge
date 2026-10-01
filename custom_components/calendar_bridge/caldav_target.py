@@ -15,10 +15,10 @@ from typing import TYPE_CHECKING, Any, TypeVar
 from urllib.parse import quote
 
 import caldav.lib.error
-from caldav.collection import Calendar
-from caldav.davclient import DAVClient
 import icalendar
 import recurring_ical_events
+from caldav.collection import Calendar
+from caldav.davclient import DAVClient
 from homeassistant.util import dt as dt_util
 
 from .target import (
@@ -59,9 +59,7 @@ class CalDavConnectionError(Exception):
 
 def build_client(url: str, username: str, password: str, verify_ssl: bool) -> DAVClient:
     """Build a (not-yet-connected) CalDAV client."""
-    return DAVClient(
-        url=url, username=username, password=password, ssl_verify_cert=verify_ssl
-    )
+    return DAVClient(url=url, username=username, password=password, ssl_verify_cert=verify_ssl)
 
 
 def _add_missing_timezones(instance_calendar: icalendar.Calendar) -> None:
