@@ -13,19 +13,29 @@ Calendar Bridge fills a gap in Home Assistant's calendar service: create Google 
 
 - **Native reminders** — a real popup/email alarm on the event itself, shown by Google/iOS/your calendar app, not just an HA notification
 - **Recurring events** — full RRULE support, including editing or deleting a single occurrence of a series
-- **Google Calendar + CalDAV/iCloud** — reuses your existing account, no duplicate `calendar.*` entities
+- **Google Calendar + CalDAV/iCloud** — signs in with its own credentials, no duplicate `calendar.*` entities
 
 ## Why
 
 Home Assistant's built-in `calendar.create_event` service can't set a reminder/alarm on an event, on any backend — the shared `CalendarEvent` data model simply has no reminder field. It also rejects the `rrule` key outright, so recurring events aren't possible through the core service either.
 
-Calendar Bridge talks directly to the Google Calendar REST API and to CalDAV (via a hand-built iCalendar `VALARM`), sitting next to your existing `google`/`caldav` integrations without touching them — it adds a handful of its own small configuration entities per calendar (see Features below), but never duplicates your `calendar.*` entities.
+Calendar Bridge talks directly to the Google Calendar REST API and to CalDAV (via a hand-built iCalendar `VALARM`), sitting next to your existing `google`/`caldav` integrations without touching or reusing their credentials — it adds a handful of its own small configuration entities per calendar (see Features below), but never duplicates your `calendar.*` entities.
+
+### Google Calendar setup
+
+Calendar Bridge owns its Google sign-in; it does not read or refresh the token of Home Assistant's core Google Calendar integration, so the two work independently.
+
+1. In the [Google Cloud console](https://console.cloud.google.com/apis/credentials), create (or reuse) a project, enable the **Google Calendar API**, configure the [OAuth consent screen](https://console.cloud.google.com/apis/credentials/consent), and create an OAuth client ID of type **Web application**. Add your Home Assistant URL's `/auth/external/callback` (or `https://my.home-assistant.io/redirect/oauth` with My Home Assistant) as an authorized redirect URI.
+2. In Home Assistant, open Settings → Devices & Services → ⋮ → Application Credentials → Add, choose **Calendar Bridge**, and enter the Client ID and Client Secret.
+3. Add the integration, choose **Add a Google Calendar account**, and sign in with Google.
+
+**Upgrading from an earlier version that borrowed the core Google sign-in:** after the update, Home Assistant asks you to reauthenticate the Google account once. Add the Application Credentials above, then follow the prompt; your calendars and settings are kept.
 
 ## Features
 
 - `calendar_bridge.create_event` service — one/multiple reminders (popup or email), recurrence (`rrule`), all-day events
 - `calendar_bridge.delete_event` / `calendar_bridge.update_event` services — delete or change (only the fields you pass) an event you previously created, by its `uid`; pass `occurrence` to target a single instance of a recurring event instead of the whole series
-- Backends: **Google Calendar** (reuses an existing core "Google Calendar" account's sign-in — no separate OAuth consent or Client ID/Secret) and **CalDAV** (e.g. iCloud)
+- Backends: **Google Calendar** (its own Google sign-in with your own OAuth client, stored in Calendar Bridge's own config entry) and **CalDAV** (e.g. iCloud)
 - Multiple target calendars per account via Config Subentries, each exposed as its own device for a clean device picker in the service UI
 - Optional **per-event Home Assistant notification**: `create_event`'s `notify` field sends a notification (e.g. to your phone) at a configurable time before that one event — independent of, or in addition to, the native Google/iOS reminder
 - Optional **per-calendar Home Assistant notification**: turn it on once for a calendar (its own switch + lead-time entity, no YAML) and every event detected there — created via `create_event`, the native "+" button, an automation, or directly in the Google/iOS app — gets an HA notification automatically
@@ -61,7 +71,7 @@ Either way, updates aren't automatic once installed as a custom repository -- HA
 
 Configuration happens entirely through the UI (Settings → Devices & Services → Add Integration → Calendar Bridge):
 
-1. Choose a backend: **Google** (pick one of your already-configured "Google Calendar" accounts — you must set that up first) or **CalDAV** (URL, username, password).
+1. Choose a backend: **Google** (sign in through Calendar Bridge's own OAuth flow, see [Google Calendar setup](#google-calendar-setup)) or **CalDAV** (URL, username, password).
 2. Pick the calendar(s) you want to expose as targets — each becomes its own device.
 3. Add more calendars to an existing account later via "Add calendar" on the device card.
 

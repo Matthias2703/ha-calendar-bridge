@@ -33,12 +33,12 @@ from homeassistant.util import dt as dt_util
 
 from .caldav_target import CalDavAuthError, CalDavCalendarTarget, CalDavConnectionError
 from .const import (
+    CONF_AUTH_IMPLEMENTATION,
     CONF_BACKFILL_EXTERNAL_EVENTS,
     CONF_CALENDAR_URL,
     CONF_DEFAULT_REMINDER_METHOD,
     CONF_DEFAULT_REMINDER_MINUTES,
     CONF_DISPLAY_NAME,
-    CONF_GOOGLE_ENTRY_ID,
     CONF_NOTIFY_ENABLED,
     CONF_NOTIFY_MESSAGE_TEMPLATE,
     CONF_NOTIFY_MINUTES_BEFORE,
@@ -51,9 +51,10 @@ from .const import (
     SERVICE_CREATE_EVENT,
     SERVICE_DELETE_EVENT,
     SERVICE_UPDATE_EVENT,
+    is_google_entry_data,
 )
 from .device import async_create_or_update_device
-from .google_target import GoogleAccountNotFoundError, GoogleCalendarTarget
+from .google_target import GoogleAccountNotFoundError, GoogleAuthError, GoogleCalendarTarget
 from .reminder_scheduler import ReminderScheduler
 from .seen_events import SeenEventsTracker
 from .services import (
@@ -505,8 +506,13 @@ async def _async_register_frontend_cards(hass: HomeAssistant) -> None:
 async def async_setup_entry(hass: HomeAssistant, entry: CalendarBridgeConfigEntry) -> bool:
     """Set up a Calendar Bridge account (CalDAV or Google) from a config entry."""
     target: CalDavCalendarTarget | GoogleCalendarTarget
-    if CONF_GOOGLE_ENTRY_ID in entry.data:
-        target = GoogleCalendarTarget(hass, entry.entry_id, entry.data[CONF_GOOGLE_ENTRY_ID])
+    if is_google_entry_data(entry.data):
+        if CONF_AUTH_IMPLEMENTATION not in entry.data:
+            # Created before Calendar Bridge had its own Google sign-in (it
+            # used to borrow the core `google` integration's session): there
+            # is no token of its own yet, so ask the user to sign in once.
+            raise ConfigEntryAuthFailed("Sign in to Google with Calendar Bridge's own credentials")
+        target = GoogleCalendarTarget(hass, entry.entry_id)
     else:
         target = CalDavCalendarTarget(
             hass,
@@ -526,6 +532,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: CalendarBridgeConfigEntr
         await target.async_test_connection()
     except CalDavAuthError as err:
         raise ConfigEntryAuthFailed("Rejected CalDAV credentials") from err
+    except GoogleAuthError as err:
+        raise ConfigEntryAuthFailed("Google rejected the stored sign-in") from err
     except (CalDavConnectionError, GoogleAccountNotFoundError, ApiException) as err:
         raise ConfigEntryNotReady("Could not reach the calendar account") from err
 

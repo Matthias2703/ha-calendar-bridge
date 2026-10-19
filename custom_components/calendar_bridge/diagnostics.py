@@ -18,7 +18,6 @@ from .const import (
     CONF_DEFAULT_REMINDER_METHOD,
     CONF_DEFAULT_REMINDER_MINUTES,
     CONF_DEFAULT_TARGET,
-    CONF_GOOGLE_ENTRY_ID,
     CONF_NOTIFY_ENABLED,
     CONF_NOTIFY_MESSAGE_TEMPLATE,
     CONF_NOTIFY_MINUTES_BEFORE,
@@ -26,6 +25,7 @@ from .const import (
     DEFAULT_NOTIFY_ENABLED,
     DEFAULT_NOTIFY_MINUTES_BEFORE,
     DOMAIN,
+    is_google_entry_data,
 )
 from .reminder_scheduler import ReminderScheduler
 from .seen_events import SeenEventsTracker
@@ -60,7 +60,7 @@ async def async_get_config_entry_diagnostics(
         )
 
     return {
-        "backend": "google" if CONF_GOOGLE_ENTRY_ID in entry.data else "caldav",
+        "backend": "google" if is_google_entry_data(entry.data) else "caldav",
         "calendar_count": len(entry.subentries),
         "subentries": subentries,
         "pending_ha_notifications": scheduler.pending_count(entry.entry_id),

@@ -3,21 +3,10 @@
     "step": {
       "user": {
         "title": "Kalender-Konto verbinden",
-        "description": "CalDAV deckt Anbieter wie iCloud ab. Falls du bereits ein CalDAV-Konto in Home Assistant eingerichtet hast, kannst du es wiederverwenden, statt das Passwort erneut einzugeben. Google Kalender nutzt deine bestehende 'Google Kalender'-Integration -- keine separate Anmeldung nötig.",
+        "description": "Verbinde ein CalDAV-Konto (z. B. iCloud) per URL und Passwort oder melde dich mit deinem eigenen Google-OAuth-Client bei Google Kalender an.",
         "menu_options": {
-          "caldav_existing": "Bestehendes CalDAV-Konto wiederverwenden",
-          "caldav": "Neues CalDAV-Konto hinzufügen",
-          "google": "Bestehendes Google-Kalender-Konto verwenden"
-        }
-      },
-      "caldav_existing": {
-        "title": "Bestehendes CalDAV-Konto wiederverwenden",
-        "description": "Nutzt die für dieses Konto bereits gespeicherten Zugangsdaten -- nichts erneut eintippen.",
-        "data": {
-          "source_entry_id": "Konto"
-        },
-        "data_description": {
-          "source_entry_id": "Die bestehende CalDAV-Integration, deren URL/Benutzername/Passwort für Calendar Bridge wiederverwendet werden soll."
+          "caldav": "CalDAV-Konto hinzufügen",
+          "google": "Google-Kalender-Konto hinzufügen"
         }
       },
       "caldav": {
@@ -56,16 +45,6 @@
           "notify_message_template": "Unterstützt die Platzhalter {summary}/{start}. Leer lassen für den Standardtext 'Reminder: {summary}'."
         }
       },
-      "google": {
-        "title": "Google-Konto auswählen",
-        "description": "Wähle, welches deiner bestehenden Google-Kalender-Konten verwendet werden soll. Anmeldung und Berechtigungen werden unverändert wiederverwendet -- Calendar Bridge sieht dein Google-Passwort nie.",
-        "data": {
-          "source_entry_id": "Konto"
-        },
-        "data_description": {
-          "source_entry_id": "Die bestehende Google-Kalender-Integration, deren Anmeldung für Calendar Bridge wiederverwendet werden soll."
-        }
-      },
       "google_calendar": {
         "title": "Kalender auswählen",
         "description": "Wähle einen oder mehrere Kalender aus, die als Ziele für den create_event-Dienst bereitgestellt werden sollen. Jeder wird zu einem eigenen Gerät. Schreibgeschützte Kalender (wie Googles automatischer Geburtstage-Kalender) werden hier nicht angeboten.",
@@ -98,6 +77,13 @@
         "data": {
           "password": "Passwort"
         }
+      },
+      "pick_implementation": {
+        "title": "Google-OAuth-Client wählen"
+      },
+      "reauth_oauth_confirm": {
+        "title": "Erneut bei Google anmelden",
+        "description": "Calendar Bridge muss sich mit eigenen Zugangsdaten bei Google anmelden (die Anmeldung der Kern-Integration Google Kalender wird nicht mehr mitbenutzt). Weiter zur Anmeldung."
       }
     },
     "error": {
@@ -106,9 +92,19 @@
     },
     "abort": {
       "already_configured": "Dieses Konto ist bereits konfiguriert.",
-      "no_google_account": "Keine Google-Kalender-Integration gefunden. Richte zuerst Home Assistants eingebaute 'Google Kalender'-Integration ein, dann füge sie hier hinzu.",
       "cannot_connect": "Verbindung zum Server nicht möglich.",
-      "reauth_successful": "Die erneute Authentifizierung war erfolgreich."
+      "reauth_successful": "Die erneute Authentifizierung war erfolgreich.",
+      "missing_credentials": "Hinterlege zuerst Client-ID und Client-Secret deines Google-OAuth-Clients unter Einstellungen > Geräte & Dienste > Anmeldedaten für Anwendungen und starte dann erneut.",
+      "wrong_account": "Melde dich mit demselben Google-Konto an, mit dem dieser Eintrag eingerichtet wurde.",
+      "oauth_error": "Ungültige Token-Daten empfangen.",
+      "oauth_failed": "Fehler beim Abrufen des Zugriffstokens.",
+      "oauth_timeout": "Zeitüberschreitung bei der OAuth-Autorisierung.",
+      "oauth_unauthorized": "OAuth-Autorisierungsfehler beim Abrufen des Zugriffstokens.",
+      "authorize_url_timeout": "Zeitüberschreitung beim Erzeugen der Autorisierungs-URL.",
+      "no_url_available": "Keine URL verfügbar. Informationen zu diesem Fehler stehen in der Home-Assistant-Dokumentation.",
+      "oauth_implementation_unavailable": "Der Google-OAuth-Client ist nicht verfügbar. Prüfe die Anmeldedaten für Anwendungen.",
+      "missing_configuration": "Der Google-OAuth-Client ist nicht konfiguriert.",
+      "user_rejected_authorize": "Die Google-Anmeldung wurde abgebrochen."
     }
   },
   "config_subentries": {
@@ -379,5 +375,8 @@
         }
       }
     }
+  },
+  "application_credentials": {
+    "description": "Calendar Bridge meldet sich mit deinem eigenen OAuth-Client bei Google an.\n\n1. Öffne den [OAuth-Zustimmungsbildschirm]({oauth_consent_url}) und richte ihn ein.\n2. Erstelle unter [Anmeldedaten]({oauth_creds_url}) eine OAuth-Client-ID vom Typ **Webanwendung** und trage die Weiterleitungs-URL deines Home Assistant ein.\n3. Aktiviere die Google Calendar API für das Projekt.\n4. Trage Client-ID und Client-Secret hier ein.\n\nDetails stehen in der [Anleitung]({more_info_url})."
   }
 }

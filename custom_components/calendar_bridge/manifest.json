@@ -1,7 +1,8 @@
 {
   "domain": "calendar_bridge",
   "name": "Calendar Bridge",
-  "after_dependencies": ["google", "http", "frontend"],
+  "after_dependencies": ["http", "frontend"],
+  "dependencies": ["application_credentials"],
   "codeowners": ["@Matthias2703"],
   "config_flow": true,
   "documentation": "https://github.com/Matthias2703/ha-calendar-bridge",

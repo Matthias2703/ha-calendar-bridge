@@ -56,7 +56,7 @@ class _FakeHass:
 
 
 def _make_target() -> GoogleCalendarTarget:
-    return GoogleCalendarTarget(_FakeHass(), "entry_1", "google_entry_1")  # type: ignore[arg-type]
+    return GoogleCalendarTarget(_FakeHass(), "entry_1")  # type: ignore[arg-type]
 
 
 def _google_event(
@@ -1751,7 +1751,7 @@ async def test_backfill_reminder_reach_failure_never_logs_the_calendar_ref(
     hass, caplog: pytest.LogCaptureFixture
 ) -> None:
     entry = _real_hass_entry_with_calendar(hass)
-    target = GoogleCalendarTarget(hass, entry.entry_id, "google_entry_1")
+    target = GoogleCalendarTarget(hass, entry.entry_id)
     service = _FakeService()
     service.async_list_events.side_effect = ApiException("boom")
 
@@ -1769,7 +1769,7 @@ async def test_poll_reach_failure_never_logs_the_calendar_ref(
     hass, caplog: pytest.LogCaptureFixture
 ) -> None:
     entry = _real_hass_entry_with_calendar(hass)
-    target = GoogleCalendarTarget(hass, entry.entry_id, "google_entry_1")
+    target = GoogleCalendarTarget(hass, entry.entry_id)
     service = _FakeService()
     service.async_list_events.side_effect = ApiException("boom")
 
@@ -1785,7 +1785,7 @@ async def test_delete_event_failure_never_logs_the_calendar_ref(
     hass, caplog: pytest.LogCaptureFixture
 ) -> None:
     entry = _real_hass_entry_with_calendar(hass)
-    target = GoogleCalendarTarget(hass, entry.entry_id, "google_entry_1")
+    target = GoogleCalendarTarget(hass, entry.entry_id)
     service = _FakeService()
     auth = _auth_finding("evt1")
     service.async_delete_event.side_effect = ApiException("boom")
@@ -1803,7 +1803,7 @@ async def test_update_event_failure_never_logs_the_calendar_ref(
     hass, caplog: pytest.LogCaptureFixture
 ) -> None:
     entry = _real_hass_entry_with_calendar(hass)
-    target = GoogleCalendarTarget(hass, entry.entry_id, "google_entry_1")
+    target = GoogleCalendarTarget(hass, entry.entry_id)
     service = _FakeService()
     auth = _auth_finding("evt1")
     service.async_patch_event.side_effect = ApiException("boom")

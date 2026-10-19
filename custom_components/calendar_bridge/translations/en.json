@@ -3,21 +3,10 @@
     "step": {
       "user": {
         "title": "Connect a calendar account",
-        "description": "CalDAV covers providers like iCloud. If you already have a CalDAV account set up in Home Assistant, reuse it to skip retyping the password. Google Calendar reuses your existing 'Google Calendar' integration -- no separate sign-in.",
+        "description": "Connect a CalDAV account (e.g. iCloud) with its URL and password, or sign in to Google Calendar with your own Google OAuth client.",
         "menu_options": {
-          "caldav_existing": "Reuse an existing CalDAV account",
-          "caldav": "Add a new CalDAV account",
-          "google": "Use an existing Google Calendar account"
-        }
-      },
-      "caldav_existing": {
-        "title": "Reuse an existing CalDAV account",
-        "description": "Uses the credentials already stored for that account -- nothing to retype.",
-        "data": {
-          "source_entry_id": "Account"
-        },
-        "data_description": {
-          "source_entry_id": "The existing CalDAV integration whose URL/username/password should be reused for Calendar Bridge."
+          "caldav": "Add a CalDAV account",
+          "google": "Add a Google Calendar account"
         }
       },
       "caldav": {
@@ -56,16 +45,6 @@
           "notify_message_template": "Supports {summary}/{start} placeholders. Leave blank for the default 'Reminder: {summary}'."
         }
       },
-      "google": {
-        "title": "Choose a Google account",
-        "description": "Pick which of your existing Google Calendar accounts to use. Its sign-in and permissions are reused as-is -- Calendar Bridge never sees your Google password.",
-        "data": {
-          "source_entry_id": "Account"
-        },
-        "data_description": {
-          "source_entry_id": "The existing Google Calendar integration whose sign-in should be reused for Calendar Bridge."
-        }
-      },
       "google_calendar": {
         "title": "Choose calendars",
         "description": "Pick one or more calendars to expose as targets for the create_event service. Each becomes its own device. Read-only calendars (like Google's automatic Birthdays calendar) aren't offered here.",
@@ -98,6 +77,13 @@
         "data": {
           "password": "Password"
         }
+      },
+      "pick_implementation": {
+        "title": "Pick a Google OAuth client"
+      },
+      "reauth_oauth_confirm": {
+        "title": "Sign in to Google again",
+        "description": "Calendar Bridge needs to sign in to Google with its own credentials (it no longer reuses the core Google Calendar integration's sign-in). Continue to sign in."
       }
     },
     "error": {
@@ -106,9 +92,19 @@
     },
     "abort": {
       "already_configured": "This account is already configured.",
-      "no_google_account": "No Google Calendar integration found. Set up Home Assistant's built-in 'Google Calendar' integration first, then add it here.",
       "cannot_connect": "Could not connect to the server.",
-      "reauth_successful": "Re-authentication was successful."
+      "reauth_successful": "Re-authentication was successful.",
+      "missing_credentials": "Add your Google OAuth Client ID and Secret under Settings > Devices & services > Application Credentials first, then start again.",
+      "wrong_account": "Sign in with the same Google account this entry was set up with.",
+      "oauth_error": "Received invalid token data.",
+      "oauth_failed": "Error while obtaining the access token.",
+      "oauth_timeout": "Timeout while resolving the OAuth authorization.",
+      "oauth_unauthorized": "OAuth authorization error while obtaining the access token.",
+      "authorize_url_timeout": "Timeout while generating the authorization URL.",
+      "no_url_available": "No URL is available. For information about this error, see the Home Assistant documentation.",
+      "oauth_implementation_unavailable": "The Google OAuth client is unavailable. Check your Application Credentials.",
+      "missing_configuration": "The Google OAuth client is not configured.",
+      "user_rejected_authorize": "Google sign-in was cancelled."
     }
   },
   "config_subentries": {
@@ -379,5 +375,8 @@
         }
       }
     }
+  },
+  "application_credentials": {
+    "description": "Calendar Bridge signs in to Google with your own OAuth client.\n\n1. Open the [OAuth consent screen]({oauth_consent_url}) and configure it.\n2. Create an OAuth client ID of type **Web application** under [Credentials]({oauth_creds_url}), and add your Home Assistant redirect URL.\n3. Enable the Google Calendar API for the project.\n4. Enter the Client ID and Client Secret here.\n\nSee [the setup guide]({more_info_url}) for details."
   }
 }

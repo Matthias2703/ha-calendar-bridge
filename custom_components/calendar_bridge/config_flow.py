@@ -1,9 +1,9 @@
 """Config flow for Calendar Bridge.
 
-The Google branch deliberately has no OAuth screen of its own -- it can only
-offer an already-configured core `google` integration account as a source
-(see `google_target.py`'s module docstring for why), so it's only shown at
-all when at least one such account exists.
+CalDAV accounts are entered as URL/username/password. Google accounts sign in
+through Calendar Bridge's own OAuth2 flow (the user's own Client ID/Secret from
+`application_credentials`), so the token lives in this integration's config
+entry and nothing is borrowed from another integration.
 """
 
 from __future__ import annotations
@@ -17,8 +17,8 @@ from caldav.collection import Calendar
 from gcal_sync.exceptions import ApiException
 from gcal_sync.model import Calendar as GoogleCalendar
 from homeassistant.config_entries import (
+    SOURCE_REAUTH,
     ConfigEntry,
-    ConfigFlow,
     ConfigFlowResult,
     ConfigSubentryData,
     ConfigSubentryFlow,
@@ -26,17 +26,17 @@ from homeassistant.config_entries import (
 )
 from homeassistant.const import CONF_PASSWORD, CONF_URL, CONF_USERNAME, CONF_VERIFY_SSL
 from homeassistant.core import callback
-from homeassistant.helpers import selector
+from homeassistant.helpers import config_entry_oauth2_flow, selector
 
 from .caldav_target import CalDavAuthError, CalDavConnectionError, build_client, discover_calendars
 from .const import (
+    CONF_AUTH_IMPLEMENTATION,
     CONF_BACKFILL_EXTERNAL_EVENTS,
     CONF_CALENDAR_URL,
     CONF_DEFAULT_REMINDER_METHOD,
     CONF_DEFAULT_REMINDER_MINUTES,
     CONF_DEFAULT_TARGET,
     CONF_DISPLAY_NAME,
-    CONF_GOOGLE_ENTRY_ID,
     CONF_NOTIFY_ENABLED,
     CONF_NOTIFY_MESSAGE_TEMPLATE,
     CONF_NOTIFY_MINUTES_BEFORE,
@@ -52,13 +52,19 @@ from .const import (
     REMINDER_METHOD_EMAIL,
     REMINDER_METHOD_NONE,
     REMINDER_METHOD_POPUP,
+    is_google_entry_data,
 )
 from .device import async_clear_other_defaults
-from .google_target import GoogleAccountNotFoundError, async_list_writable_calendars
+from .google_target import (
+    GoogleAccountNotFoundError,
+    GoogleAuthError,
+    async_list_writable_calendars,
+    async_list_writable_calendars_with_token,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
-_GOOGLE_DOMAIN = "google"
+_GOOGLE_CALENDAR_SCOPE = "https://www.googleapis.com/auth/calendar"
 
 _CALDAV_SCHEMA = vol.Schema(
     {
@@ -145,17 +151,32 @@ def _google_calendar_choices(calendars: list[GoogleCalendar]) -> dict[str, str]:
 _GOOGLE_REMINDER_METHODS = (REMINDER_METHOD_POPUP, REMINDER_METHOD_EMAIL, REMINDER_METHOD_NONE)
 
 
-class CalendarBridgeConfigFlow(ConfigFlow, domain=DOMAIN):
+class CalendarBridgeConfigFlow(config_entry_oauth2_flow.AbstractOAuth2FlowHandler, domain=DOMAIN):
     """Handle the initial setup of a Calendar Bridge account."""
 
     VERSION = 1
 
     def __init__(self) -> None:
+        super().__init__()
         self._caldav_data: dict[str, Any] = {}
         self._caldav_calendars: list[Calendar] = []
         self._last_test_error: str | None = None
-        self._google_entry_id: str | None = None
+        self._oauth_data: dict[str, Any] = {}
         self._google_calendars: list[GoogleCalendar] = []
+
+    @property
+    def logger(self) -> logging.Logger:
+        """Return the logger used by the OAuth2 flow helper."""
+        return _LOGGER
+
+    @property
+    def extra_authorize_data(self) -> dict[str, Any]:
+        """Ask Google for calendar access and a refresh token."""
+        return {
+            "scope": _GOOGLE_CALENDAR_SCOPE,
+            "access_type": "offline",
+            "prompt": "consent",
+        }
 
     @classmethod
     @callback
@@ -167,66 +188,56 @@ class CalendarBridgeConfigFlow(ConfigFlow, domain=DOMAIN):
 
     async def async_step_user(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         """Choose a backend."""
-        menu_options = []
-        if self._existing_caldav_entries():
-            menu_options.append("caldav_existing")
-        menu_options.append("caldav")
-        if self._existing_google_entries():
-            menu_options.append("google")
-        if len(menu_options) == 1:
-            return await self.async_step_caldav()
-        return self.async_show_menu(step_id="user", menu_options=menu_options)
+        return self.async_show_menu(step_id="user", menu_options=["caldav", "google"])
 
-    def _existing_caldav_entries(self) -> list[ConfigEntry]:
-        """Core `caldav` accounts already set up in this HA instance."""
-        return self.hass.config_entries.async_entries("caldav")
+    async def async_step_google(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
+        """Start Calendar Bridge's own Google sign-in."""
+        return await self.async_step_pick_implementation()
 
-    def _existing_google_entries(self) -> list[ConfigEntry]:
-        """Core `google` accounts already set up in this HA instance."""
-        return self.hass.config_entries.async_entries(_GOOGLE_DOMAIN)
+    async def async_oauth_create_entry(self, data: dict[str, Any]) -> ConfigFlowResult:
+        """Google sign-in finished: identify the account, then pick calendars (or finish reauth)."""
+        try:
+            calendars = await async_list_writable_calendars_with_token(
+                self.hass, data["token"]["access_token"]
+            )
+        except ApiException:
+            return self.async_abort(reason="cannot_connect")
 
-    async def async_step_caldav_existing(
-        self, user_input: dict[str, Any] | None = None
-    ) -> ConfigFlowResult:
-        """Reuse the credentials of an already-configured core CalDAV account.
+        account_id = next((cal.id for cal in calendars if cal.primary), None)
+        if account_id is None:
+            return self.async_abort(reason="cannot_connect")
+        unique_id = f"google:{account_id}"
 
-        Avoids asking the user to retype a password HA already has stored --
-        the credentials never leave the HA process, they're just copied from
-        one config entry's data into another.
-        """
-        entries = self._existing_caldav_entries()
-        errors: dict[str, str] = {}
+        if self.source == SOURCE_REAUTH:
+            reauth_entry = self._get_reauth_entry()
+            # An entry created while Calendar Bridge still borrowed the core
+            # `google` integration's session has a different unique id and no
+            # token of its own: this sign-in adopts it. Otherwise the user
+            # must sign in with the same account again.
+            if CONF_AUTH_IMPLEMENTATION in reauth_entry.data:
+                await self.async_set_unique_id(unique_id)
+                self._abort_if_unique_id_mismatch(reason="wrong_account")
+            return self.async_update_reload_and_abort(reauth_entry, unique_id=unique_id, data=data)
 
-        if user_input is not None:
-            source = next(e for e in entries if e.entry_id == user_input["source_entry_id"])
-            data = {
-                CONF_URL: source.data[CONF_URL],
-                CONF_USERNAME: source.data[CONF_USERNAME],
-                CONF_PASSWORD: source.data[CONF_PASSWORD],
-                CONF_VERIFY_SSL: source.data.get(CONF_VERIFY_SSL, True),
-            }
-            result = await self._async_test_caldav_and_continue(data)
-            if result is not None:
-                return result
-            errors["base"] = self._last_test_error or "cannot_connect"
-
-        schema = vol.Schema(
-            {
-                vol.Required("source_entry_id"): vol.In(
-                    {entry.entry_id: entry.title for entry in entries}
-                )
-            }
-        )
-        return self.async_show_form(step_id="caldav_existing", data_schema=schema, errors=errors)
+        await self.async_set_unique_id(unique_id)
+        self._abort_if_unique_id_configured()
+        self._oauth_data = data
+        self._google_calendars = calendars
+        return await self.async_step_google_calendar()
 
     async def async_step_reauth(self, entry_data: Mapping[str, Any]) -> ConfigFlowResult:
-        """Start a reauth flow after a CalDAV account's credentials are rejected.
-
-        Google entries never trigger this -- they reuse an existing core
-        `google` account's own OAuth session, which has no password of its
-        own for this integration to get wrong.
-        """
+        """Start a reauth flow after an account's credentials are rejected."""
+        if is_google_entry_data(entry_data):
+            return await self.async_step_reauth_oauth_confirm()
         return await self.async_step_reauth_confirm()
+
+    async def async_step_reauth_oauth_confirm(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Explain that Google needs a new sign-in, then run the OAuth flow."""
+        if user_input is None:
+            return self.async_show_form(step_id="reauth_oauth_confirm")
+        return await self.async_step_pick_implementation()
 
     async def async_step_reauth_confirm(
         self, user_input: dict[str, Any] | None = None
@@ -344,39 +355,6 @@ class CalendarBridgeConfigFlow(ConfigFlow, domain=DOMAIN):
         )
         return self.async_show_form(step_id="caldav_calendar", data_schema=schema)
 
-    async def async_step_google(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
-        """Pick which existing core `google` account to borrow, if more than one.
-
-        Never asks for a Client ID/Secret or shows a consent screen -- this
-        only ever reuses the OAuth session of an account already set up via
-        HA's own "Google Calendar" integration.
-        """
-        entries = self._existing_google_entries()
-        if not entries:
-            return self.async_abort(reason="no_google_account")
-        if len(entries) == 1:
-            return await self._async_use_google_entry(entries[0])
-        if user_input is not None:
-            entry = next(e for e in entries if e.entry_id == user_input["source_entry_id"])
-            return await self._async_use_google_entry(entry)
-
-        schema = vol.Schema(
-            {vol.Required("source_entry_id"): vol.In({e.entry_id: e.title for e in entries})}
-        )
-        return self.async_show_form(step_id="google", data_schema=schema)
-
-    async def _async_use_google_entry(self, google_entry: ConfigEntry) -> ConfigFlowResult:
-        await self.async_set_unique_id(f"google:{google_entry.entry_id}")
-        self._abort_if_unique_id_configured()
-        try:
-            calendars = await async_list_writable_calendars(self.hass, google_entry.entry_id)
-        except GoogleAccountNotFoundError, ApiException:
-            return self.async_abort(reason="cannot_connect")
-
-        self._google_entry_id = google_entry.entry_id
-        self._google_calendars = calendars
-        return await self.async_step_google_calendar()
-
     async def async_step_google_calendar(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
@@ -413,7 +391,7 @@ class CalendarBridgeConfigFlow(ConfigFlow, domain=DOMAIN):
             ]
             return self.async_create_entry(
                 title="Google Calendar",
-                data={CONF_GOOGLE_ENTRY_ID: self._google_entry_id},
+                data=self._oauth_data,
                 subentries=subentries,
             )
 
@@ -435,7 +413,7 @@ class CalendarBridgeConfigFlow(ConfigFlow, domain=DOMAIN):
 
 
 def _is_google_entry(entry: ConfigEntry) -> bool:
-    return CONF_GOOGLE_ENTRY_ID in entry.data
+    return is_google_entry_data(entry.data)
 
 
 class CalendarSubentryFlow(ConfigSubentryFlow):
@@ -454,8 +432,11 @@ class CalendarSubentryFlow(ConfigSubentryFlow):
             if not self._google_calendars:
                 try:
                     self._google_calendars = await async_list_writable_calendars(
-                        self.hass, entry.data[CONF_GOOGLE_ENTRY_ID]
+                        self.hass, entry.entry_id
                     )
+                except GoogleAuthError:
+                    entry.async_start_reauth(self.hass)
+                    return self.async_abort(reason="invalid_auth")
                 except GoogleAccountNotFoundError, ApiException:
                     return self.async_abort(reason="cannot_connect")
             choices = {

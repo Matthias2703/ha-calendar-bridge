@@ -8,11 +8,11 @@ from unittest.mock import MagicMock
 import pytest
 
 from custom_components.calendar_bridge.const import (
+    CONF_AUTH_IMPLEMENTATION,
     CONF_CALENDAR_URL,
     CONF_DEFAULT_REMINDER_METHOD,
     CONF_DEFAULT_REMINDER_MINUTES,
     CONF_DEFAULT_TARGET,
-    CONF_GOOGLE_ENTRY_ID,
     CONF_NOTIFY_ENABLED,
     CONF_NOTIFY_TARGET,
     DOMAIN,
@@ -32,7 +32,9 @@ def _make_hass_and_entry(*, google: bool = False) -> tuple[MagicMock, MagicMock]
     }
     entry = MagicMock()
     entry.subentries = {"sub1": subentry}
-    entry.data = {CONF_GOOGLE_ENTRY_ID: "google_entry_1"} if google else {"username": "matthias"}
+    entry.data = (
+        {CONF_AUTH_IMPLEMENTATION: "calendar_bridge_google"} if google else {"username": "matthias"}
+    )
 
     seen_events = MagicMock()
     seen_events.has_baseline.return_value = True

@@ -1,12 +1,8 @@
 """Google Calendar backend.
 
-Deliberately does *not* register its own OAuth application credentials or run
-its own consent flow. Instead it borrows the live, auto-refreshing
-`OAuth2Session` of an already-configured core `google` integration account --
-see `config_flow.py`'s "google" branch for how that source entry is chosen.
-This means calendar_bridge can only offer Google Calendar as a backend when
-the user already has the core Google Calendar integration set up; it never
-prompts for a Client ID/Secret of its own.
+Authenticates with the OAuth2 token stored in Calendar Bridge's own config
+entry (see `application_credentials.py` and the OAuth2 flow in
+`config_flow.py`); it never touches another integration's credentials.
 """
 
 from __future__ import annotations
@@ -17,6 +13,7 @@ from datetime import UTC, date, datetime, timedelta
 from typing import Any, cast
 from urllib.parse import quote
 
+from aiohttp import ClientError, ClientResponseError
 from gcal_sync.api import (
     CALENDAR_EVENTS_URL,
     CALENDAR_LIST_URL,
@@ -25,7 +22,7 @@ from gcal_sync.api import (
     ListEventsRequest,
 )
 from gcal_sync.auth import AbstractAuth
-from gcal_sync.exceptions import ApiException
+from gcal_sync.exceptions import ApiException, AuthException
 from gcal_sync.model import Calendar, DateOrDatetime, ReminderOverride, Reminders
 from gcal_sync.model import Event as GoogleEvent
 from gcal_sync.model import ReminderMethod as GoogleReminderMethod
@@ -34,6 +31,7 @@ from homeassistant.helpers import config_entry_oauth2_flow
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.util import dt as dt_util
 
+from .const import DOMAIN
 from .target import (
     DEFAULT_EVENT_DURATION,
     CalendarNotFoundError,
@@ -51,8 +49,6 @@ from .target import (
 
 _LOGGER = logging.getLogger(__name__)
 
-_GOOGLE_DOMAIN = "google"
-
 _REMINDER_METHOD_MAP: dict[ReminderMethod, GoogleReminderMethod] = {
     "popup": GoogleReminderMethod.POPUP,
     "email": GoogleReminderMethod.EMAIL,
@@ -60,7 +56,7 @@ _REMINDER_METHOD_MAP: dict[ReminderMethod, GoogleReminderMethod] = {
 
 
 class GoogleAccountNotFoundError(CalendarNotFoundError):
-    """Raised when the referenced core `google` config entry no longer exists.
+    """Raised when this Calendar Bridge config entry no longer exists.
 
     A `CalendarNotFoundError` subclass so every caller that already handles
     "this calendar/account is gone" (services.py's create_event handler, the
@@ -68,49 +64,76 @@ class GoogleAccountNotFoundError(CalendarNotFoundError):
     """
 
 
-class _GoogleSessionAuth(AbstractAuth):
-    """Feeds gcal_sync a token from an existing `google` entry's OAuth2Session.
+class GoogleAuthError(AuthException):
+    """Raised when Google rejects the stored token and a re-sign-in is needed."""
 
-    Mirrors `homeassistant.components.google.api.ApiAuthImpl` (not imported
-    directly -- another integration's internals aren't a stable API to
-    depend on).
-    """
+
+class _GoogleSessionAuth(AbstractAuth):
+    """Feeds gcal_sync a token from this entry's own OAuth2Session."""
 
     def __init__(self, websession: Any, session: config_entry_oauth2_flow.OAuth2Session) -> None:
         super().__init__(websession)
         self._session = session
 
     async def async_get_access_token(self) -> str:
-        await self._session.async_ensure_token_valid()
+        try:
+            await self._session.async_ensure_token_valid()
+        except ClientResponseError as err:
+            if err.status in (400, 401):
+                raise GoogleAuthError("Google rejected the stored token") from err
+            raise ApiException("Could not refresh the Google token") from err
+        except ClientError as err:
+            raise ApiException("Could not reach Google to refresh the token") from err
         return cast(str, self._session.token["access_token"])
 
 
 async def async_get_google_session(
-    hass: HomeAssistant, google_entry_id: str
+    hass: HomeAssistant, entry_id: str
 ) -> config_entry_oauth2_flow.OAuth2Session:
-    """Build a live, auto-refreshing OAuth2Session for an existing `google` entry."""
-    google_entry = hass.config_entries.async_get_entry(google_entry_id)
-    if google_entry is None or google_entry.domain != _GOOGLE_DOMAIN:
-        raise GoogleAccountNotFoundError(google_entry_id)
-    implementation = await config_entry_oauth2_flow.async_get_config_entry_implementation(
-        hass, google_entry
-    )
-    return config_entry_oauth2_flow.OAuth2Session(hass, google_entry, implementation)
+    """Build a live, auto-refreshing OAuth2Session for a Calendar Bridge entry."""
+    entry = hass.config_entries.async_get_entry(entry_id)
+    if entry is None or entry.domain != DOMAIN:
+        raise GoogleAccountNotFoundError(entry_id)
+    try:
+        implementation = await config_entry_oauth2_flow.async_get_config_entry_implementation(
+            hass, entry
+        )
+    except config_entry_oauth2_flow.ImplementationUnavailableError as err:
+        raise ApiException("Google OAuth implementation is unavailable") from err
+    return config_entry_oauth2_flow.OAuth2Session(hass, entry, implementation)
 
 
-async def async_list_writable_calendars(
-    hass: HomeAssistant, google_entry_id: str
-) -> list[Calendar]:
+async def async_list_writable_calendars(hass: HomeAssistant, entry_id: str) -> list[Calendar]:
     """Return the account's calendars this session can create events on.
 
     Filters out read-only calendars -- most notably Google's own
     auto-generated "Birthdays" calendar, which looks like a normal secondary
     calendar but rejects writes.
     """
-    session = await async_get_google_session(hass, google_entry_id)
+    session = await async_get_google_session(hass, entry_id)
     auth = _GoogleSessionAuth(async_get_clientsession(hass), session)
     service = GoogleCalendarService(auth)
     response = await service.async_list_calendars()
+    return [cal for cal in response.items if cal.access_role.is_writer]
+
+
+class _StaticTokenAuth(AbstractAuth):
+    """gcal_sync auth for a freshly issued token, before any config entry exists."""
+
+    def __init__(self, websession: Any, token: str) -> None:
+        super().__init__(websession)
+        self._token = token
+
+    async def async_get_access_token(self) -> str:
+        return self._token
+
+
+async def async_list_writable_calendars_with_token(
+    hass: HomeAssistant, access_token: str
+) -> list[Calendar]:
+    """Like `async_list_writable_calendars`, for the token of a sign-in still in progress."""
+    auth = _StaticTokenAuth(async_get_clientsession(hass), access_token)
+    response = await GoogleCalendarService(auth).async_list_calendars()
     return [cal for cal in response.items if cal.access_role.is_writer]
 
 
@@ -351,27 +374,27 @@ def _update_body(updates: EventUpdate, current: GoogleEvent | None) -> dict[str,
 class GoogleCalendarTarget:
     """Creates and backfills events on a Google Calendar via `gcal_sync`."""
 
-    def __init__(self, hass: HomeAssistant, entry_id: str, google_entry_id: str) -> None:
+    def __init__(self, hass: HomeAssistant, entry_id: str) -> None:
         """Set up the target.
 
         `entry_id` is this Google account's own calendar_bridge config
-        entry (used to resolve a subentry's display title for safe
-        logging, see `target.resolve_subentry_title`) -- distinct from
-        `google_entry_id`, the *foreign* core `google` integration's entry
-        this account borrows its OAuth session from.
+        entry: it holds the OAuth token and is used to resolve a subentry's
+        display title for safe logging, see `target.resolve_subentry_title`.
         """
         self._hass = hass
         self._entry_id = entry_id
-        self._google_entry_id = google_entry_id
 
     async def _async_service(self) -> tuple[GoogleCalendarService, AbstractAuth]:
-        session = await async_get_google_session(self._hass, self._google_entry_id)
+        session = await async_get_google_session(self._hass, self._entry_id)
         auth = _GoogleSessionAuth(async_get_clientsession(self._hass), session)
         return GoogleCalendarService(auth), auth
 
     async def async_test_connection(self) -> None:
-        """Verify the account is reachable; raises GoogleAccountNotFoundError/ApiException."""
-        await async_list_writable_calendars(self._hass, self._google_entry_id)
+        """Verify the account is reachable; raises GoogleAccountNotFoundError/ApiException.
+
+        `GoogleAuthError` (an `ApiException`) means the stored sign-in was rejected.
+        """
+        await async_list_writable_calendars(self._hass, self._entry_id)
 
     async def async_calendar_still_exists(self, calendar_ref: str) -> bool | None:
         """True/False if calendar_ref is still among the account's writable calendars.
@@ -380,7 +403,7 @@ class GoogleCalendarTarget:
         callers must never treat that as "deleted".
         """
         try:
-            calendars = await async_list_writable_calendars(self._hass, self._google_entry_id)
+            calendars = await async_list_writable_calendars(self._hass, self._entry_id)
         except ApiException, GoogleAccountNotFoundError:
             return None
         return any(calendar.id == calendar_ref for calendar in calendars)

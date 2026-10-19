@@ -40,12 +40,12 @@ from custom_components.calendar_bridge.const import (
     ATTR_NOTIFY_TARGET,
     ATTR_START,
     ATTR_SUMMARY,
+    CONF_AUTH_IMPLEMENTATION,
     CONF_BACKFILL_EXTERNAL_EVENTS,
     CONF_CALENDAR_URL,
     CONF_DEFAULT_REMINDER_METHOD,
     CONF_DEFAULT_REMINDER_MINUTES,
     CONF_DISPLAY_NAME,
-    CONF_GOOGLE_ENTRY_ID,
     DOMAIN,
     REMINDER_METHOD_POPUP,
     SERVICE_CREATE_EVENT,
@@ -240,7 +240,7 @@ async def test_google_explicit_entry_follows_a_move_then_a_shape_change_via_the_
 ) -> None:
     entry = MockConfigEntry(
         domain=DOMAIN,
-        data={CONF_GOOGLE_ENTRY_ID: "google_entry_1"},
+        data={CONF_AUTH_IMPLEMENTATION: "calendar_bridge_google"},
         subentries_data=[
             {
                 "subentry_type": "calendar",

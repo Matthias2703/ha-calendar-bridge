@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+from typing import Any
+
 DOMAIN = "calendar_bridge"
 
 SERVICE_CREATE_EVENT = "create_event"
@@ -11,9 +14,12 @@ SERVICE_UPDATE_EVENT = "update_event"
 CONF_CALENDAR_URL = "calendar_url"
 CONF_DISPLAY_NAME = "display_name"
 
-# Stored on a Google account's top-level entry: the entry_id of the existing
-# core `google` integration whose OAuth session this account borrows.
+# Legacy marker: entries created before Calendar Bridge had its own Google
+# OAuth borrowed another integration's session and stored that entry's id here.
+# Such an entry has no token of its own and is sent through reauth to sign in.
 CONF_GOOGLE_ENTRY_ID = "google_entry_id"
+# Present on every entry that has its own OAuth2 sign-in (set by HA's OAuth flow).
+CONF_AUTH_IMPLEMENTATION = "auth_implementation"
 
 CONF_DEFAULT_REMINDER_MINUTES = "default_reminder_minutes"
 CONF_DEFAULT_REMINDER_METHOD = "default_reminder_method"
@@ -74,3 +80,8 @@ ATTR_OCCURRENCE = "occurrence"
 ATTR_NOTIFY = "notify"
 ATTR_NOTIFY_TARGET = "target"
 ATTR_NOTIFY_MESSAGE = "message"
+
+
+def is_google_entry_data(data: Mapping[str, Any]) -> bool:
+    """Whether a config entry's data belongs to the Google backend."""
+    return CONF_AUTH_IMPLEMENTATION in data or CONF_GOOGLE_ENTRY_ID in data
