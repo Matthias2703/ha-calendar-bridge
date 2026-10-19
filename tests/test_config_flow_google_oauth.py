@@ -142,7 +142,6 @@ async def test_google_sign_in_stores_the_token_in_its_own_entry(
                 "default_target": False,
                 "backfill_external_events": False,
                 "notify_enabled": False,
-                "notify_target": "",
                 "notify_minutes_before": 15,
                 "notify_message_template": "",
             },
@@ -150,7 +149,7 @@ async def test_google_sign_in_stores_the_token_in_its_own_entry(
 
     assert result["type"] is FlowResultType.CREATE_ENTRY
     data = result["data"]
-    assert data[CONF_AUTH_IMPLEMENTATION] == f"{DOMAIN}_cred"
+    assert data[CONF_AUTH_IMPLEMENTATION] == "cred"
     assert data["token"]["access_token"] == "mock-access-token"
     assert CONF_GOOGLE_ENTRY_ID not in data
     entry = result["result"]
@@ -195,7 +194,7 @@ async def test_legacy_borrowed_entry_is_adopted_by_reauth(
     assert result["type"] is FlowResultType.ABORT
     assert result["reason"] == "reauth_successful"
     assert CONF_GOOGLE_ENTRY_ID not in entry.data
-    assert entry.data[CONF_AUTH_IMPLEMENTATION] == f"{DOMAIN}_cred"
+    assert entry.data[CONF_AUTH_IMPLEMENTATION] == "cred"
     assert entry.data["token"]["access_token"] == "mock-access-token"
     assert entry.unique_id == "google:me@example.com"
     assert len(entry.subentries) == 1
@@ -213,7 +212,7 @@ async def test_reauth_with_a_different_google_account_is_refused(
         domain=DOMAIN,
         unique_id="google:someone-else@example.com",
         data={
-            CONF_AUTH_IMPLEMENTATION: f"{DOMAIN}_cred",
+            CONF_AUTH_IMPLEMENTATION: "cred",
             "token": {"access_token": "old", "refresh_token": "old", "expires_at": 0},
         },
     )
