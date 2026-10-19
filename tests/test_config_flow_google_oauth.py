@@ -142,6 +142,7 @@ async def test_google_sign_in_stores_the_token_in_its_own_entry(
                 "default_target": False,
                 "backfill_external_events": False,
                 "notify_enabled": False,
+                "notify_target": "notify.phone",
                 "notify_minutes_before": 15,
                 "notify_message_template": "",
             },
