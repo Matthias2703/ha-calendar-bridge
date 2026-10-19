@@ -261,3 +261,9 @@ async def test_google_explicit_entry_for_a_series_is_found_by_the_next_poll() ->
     )
     found = await _real_google_poll(target, instance)
     await _assert_explicit_entry_is_found_not_duplicated(hass, found)
+
+
+@pytest.fixture(autouse=True)
+def _clock_before_the_hardcoded_event_dates(freezer) -> None:
+    """These tests schedule events on fixed 2026 dates, which must stay in the future."""
+    freezer.move_to("2026-09-20T12:00:00+00:00")

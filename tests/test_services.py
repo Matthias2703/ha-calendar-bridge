@@ -774,3 +774,9 @@ async def test_update_event_empty_rrule_still_clears_the_series_not_rejected():
         )
 
     assert result == {"updated": True}
+
+
+@pytest.fixture(autouse=True)
+def _clock_before_the_hardcoded_event_dates(freezer) -> None:
+    """These tests schedule events on fixed 2026 dates, which must stay in the future."""
+    freezer.move_to("2026-09-20T12:00:00+00:00")

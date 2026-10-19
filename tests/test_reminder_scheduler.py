@@ -102,3 +102,9 @@ async def test_pending_count_drops_a_reminder_once_it_fires():
         await fire_callback(fire_at)
 
     assert scheduler.pending_count("entry-1") == 0
+
+
+@pytest.fixture(autouse=True)
+def _clock_before_the_hardcoded_event_dates(freezer) -> None:
+    """These tests schedule events on fixed 2026 dates, which must stay in the future."""
+    freezer.move_to("2026-09-20T12:00:00+00:00")

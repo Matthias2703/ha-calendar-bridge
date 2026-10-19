@@ -335,6 +335,7 @@ async def test_register_frontend_cards_is_a_noop_when_http_is_not_loaded() -> No
 @pytest.mark.asyncio
 async def test_register_frontend_cards_registers_the_static_path_and_extra_js_url() -> None:
     hass = MagicMock()
+    hass.config.components = {"frontend"}
     hass.http.async_register_static_paths = AsyncMock()
 
     with patch("custom_components.calendar_bridge.add_extra_js_url") as mock_add_js:

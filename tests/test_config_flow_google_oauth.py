@@ -45,8 +45,9 @@ def _calendars() -> list[SimpleNamespace]:
 
 
 @pytest.fixture
-async def credentials(hass: HomeAssistant) -> None:
+async def credentials(hass: HomeAssistant, enable_custom_integrations: None) -> None:
     assert await async_setup_component(hass, "application_credentials", {})
+    assert await async_setup_component(hass, DOMAIN, {})
     await async_import_client_credential(
         hass, DOMAIN, ClientCredential("client-id", "client-secret"), "cred"
     )
