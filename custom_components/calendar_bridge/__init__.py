@@ -493,7 +493,7 @@ async def _async_register_frontend_cards(hass: HomeAssistant) -> None:
     `http`) -- there's no dashboard to serve the card to either way, so
     this is skipped rather than treated as a setup failure.
     """
-    if hass.http is None:
+    if hass.http is None or "frontend" not in hass.config.components:
         _LOGGER.debug("Skipping frontend card registration -- http/frontend isn't loaded")
         return
     js_path = Path(__file__).parent / "www" / _FRONTEND_JS_FILENAME

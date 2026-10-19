@@ -154,6 +154,7 @@ _GOOGLE_REMINDER_METHODS = (REMINDER_METHOD_POPUP, REMINDER_METHOD_EMAIL, REMIND
 class CalendarBridgeConfigFlow(config_entry_oauth2_flow.AbstractOAuth2FlowHandler, domain=DOMAIN):
     """Handle the initial setup of a Calendar Bridge account."""
 
+    DOMAIN = DOMAIN
     VERSION = 1
 
     def __init__(self) -> None:
