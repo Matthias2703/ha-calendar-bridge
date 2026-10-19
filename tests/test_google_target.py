@@ -1816,3 +1816,44 @@ async def test_update_event_failure_never_logs_the_calendar_ref(
     assert updated is False
     assert _CALENDAR_REF not in caplog.text
     assert "Home" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_rejected_token_refresh_starts_reauth_and_raises_auth_error() -> None:
+    from unittest.mock import AsyncMock
+
+    from aiohttp import ClientResponseError
+
+    from custom_components.calendar_bridge.google_target import (
+        GoogleAuthError,
+        _GoogleSessionAuth,
+    )
+
+    session = MagicMock()
+    session.async_ensure_token_valid = AsyncMock(
+        side_effect=ClientResponseError(MagicMock(), (), status=400)
+    )
+    auth = _GoogleSessionAuth(MagicMock(), session)
+
+    with pytest.raises(GoogleAuthError):
+        await auth.async_get_access_token()
+
+    session.config_entry.async_start_reauth.assert_called_once_with(session.hass)
+
+
+@pytest.mark.asyncio
+async def test_unreachable_google_during_refresh_does_not_start_reauth() -> None:
+    from unittest.mock import AsyncMock
+
+    from aiohttp import ClientConnectionError
+
+    from custom_components.calendar_bridge.google_target import _GoogleSessionAuth
+
+    session = MagicMock()
+    session.async_ensure_token_valid = AsyncMock(side_effect=ClientConnectionError())
+    auth = _GoogleSessionAuth(MagicMock(), session)
+
+    with pytest.raises(ApiException):
+        await auth.async_get_access_token()
+
+    session.config_entry.async_start_reauth.assert_not_called()

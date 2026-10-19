@@ -80,6 +80,10 @@ class _GoogleSessionAuth(AbstractAuth):
             await self._session.async_ensure_token_valid()
         except ClientResponseError as err:
             if err.status in (400, 401):
+                # Raised mid-run (poll, service call) there is no setup to
+                # fail, so ask for the re-sign-in right here; a flow already
+                # in progress is not duplicated.
+                self._session.config_entry.async_start_reauth(self._session.hass)
                 raise GoogleAuthError("Google rejected the stored token") from err
             raise ApiException("Could not refresh the Google token") from err
         except ClientError as err:
