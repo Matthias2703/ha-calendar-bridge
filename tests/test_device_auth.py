@@ -80,9 +80,13 @@ async def test_poll_waits_through_pending_then_returns_the_token(
             ),
         ]
     )
+
     # the mocker always answers with the first matching registration, so hand
     # out one response per call instead
-    aioclient_mock.post(TOKEN_URL, side_effect=lambda *_args: next(answers))
+    async def _next_answer(*_args: object) -> AiohttpClientMockResponse:
+        return next(answers)
+
+    aioclient_mock.post(TOKEN_URL, side_effect=_next_answer)
 
     token = await async_poll_for_token(async_get_clientsession(hass), "id", "secret", _CODE)
 

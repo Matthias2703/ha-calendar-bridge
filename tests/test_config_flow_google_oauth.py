@@ -5,6 +5,7 @@ Nothing is read from, or refreshed through, another integration's config entry.
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Iterator
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -284,10 +285,15 @@ async def test_device_flow_shows_a_code_and_stores_the_token(
 ) -> None:
     """Like the core Google integration: show a code, no redirect URL involved."""
     result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": "user"})
+    approved = asyncio.Event()
+
+    async def _wait_for_approval(*_args: object) -> dict[str, object]:
+        await approved.wait()
+        return _TOKEN
 
     with (
         patch(_REQUEST, return_value=_CODE),
-        patch(_POLL, return_value=_TOKEN),
+        patch(_POLL, side_effect=_wait_for_approval),
         patch(_LIST, return_value=_calendars()),
     ):
         result = await hass.config_entries.flow.async_configure(
@@ -297,6 +303,7 @@ async def test_device_flow_shows_a_code_and_stores_the_token(
         assert result["description_placeholders"]["user_code"] == "ABCD-EFGH"
         assert result["description_placeholders"]["url"] == "https://www.google.com/device"
 
+        approved.set()
         await hass.async_block_till_done()
         result = await hass.config_entries.flow.async_configure(result["flow_id"])
         assert result["type"] is FlowResultType.FORM
@@ -329,12 +336,18 @@ async def test_device_flow_aborts_when_the_code_expires(
     hass: HomeAssistant, enable_custom_integrations: None
 ) -> None:
     result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": "user"})
+    expire = asyncio.Event()
 
-    with patch(_REQUEST, return_value=_CODE), patch(_POLL, side_effect=DeviceAuthExpired):
+    async def _expire(*_args: object) -> dict[str, object]:
+        await expire.wait()
+        raise DeviceAuthExpired
+
+    with patch(_REQUEST, return_value=_CODE), patch(_POLL, side_effect=_expire):
         result = await hass.config_entries.flow.async_configure(
             result["flow_id"], {"next_step_id": "google"}
         )
         assert result["type"] is FlowResultType.SHOW_PROGRESS
+        expire.set()
         await hass.async_block_till_done()
         result = await hass.config_entries.flow.async_configure(result["flow_id"])
 
