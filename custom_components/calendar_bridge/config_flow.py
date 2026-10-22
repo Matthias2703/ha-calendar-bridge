@@ -180,6 +180,7 @@ class CalendarBridgeConfigFlow(config_entry_oauth2_flow.AbstractOAuth2FlowHandle
         self._caldav_calendars: list[Calendar] = []
         self._last_test_error: str | None = None
         self._oauth_data: dict[str, Any] = {}
+        self._google_title = "Google Calendar"
         self._google_calendars: list[GoogleCalendar] = []
         # Google's device flow ("enter this code") is tried first, like the
         # core Google Calendar integration; a client Google refuses it for
@@ -293,6 +294,8 @@ class CalendarBridgeConfigFlow(config_entry_oauth2_flow.AbstractOAuth2FlowHandle
         if account_id is None:
             return self.async_abort(reason="cannot_connect")
         unique_id = f"google:{account_id}"
+        # Several accounts must be told apart in every picker and list.
+        title = f"Google Calendar ({account_id})"
 
         if self.source == SOURCE_REAUTH:
             reauth_entry = self._get_reauth_entry()
@@ -303,11 +306,19 @@ class CalendarBridgeConfigFlow(config_entry_oauth2_flow.AbstractOAuth2FlowHandle
             if CONF_AUTH_IMPLEMENTATION in reauth_entry.data:
                 await self.async_set_unique_id(unique_id)
                 self._abort_if_unique_id_mismatch(reason="wrong_account")
-            return self.async_update_reload_and_abort(reauth_entry, unique_id=unique_id, data=data)
+            if any(
+                other.unique_id == unique_id and other.entry_id != reauth_entry.entry_id
+                for other in self._async_current_entries(include_ignore=False)
+            ):
+                return self.async_abort(reason="already_configured")
+            return self.async_update_reload_and_abort(
+                reauth_entry, unique_id=unique_id, title=title, data=data
+            )
 
         await self.async_set_unique_id(unique_id)
         self._abort_if_unique_id_configured()
         self._oauth_data = data
+        self._google_title = title
         self._google_calendars = calendars
         return await self.async_step_google_calendar()
 
@@ -476,7 +487,7 @@ class CalendarBridgeConfigFlow(config_entry_oauth2_flow.AbstractOAuth2FlowHandle
                 for index, calendar_id in enumerate(user_input[CONF_CALENDAR_URL])
             ]
             return self.async_create_entry(
-                title="Google Calendar",
+                title=self._google_title,
                 data=self._oauth_data,
                 subentries=subentries,
             )

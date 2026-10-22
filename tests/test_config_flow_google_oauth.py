@@ -170,6 +170,7 @@ async def test_google_sign_in_stores_the_token_in_its_own_entry(
     assert CONF_GOOGLE_ENTRY_ID not in data
     entry = result["result"]
     assert entry.unique_id == "google:me@example.com"
+    assert entry.title == "Google Calendar (me@example.com)"
     assert [sub.unique_id for sub in entry.subentries.values()] == ["me@example.com"]
     # an untouched "Notification target" must be accepted and stored empty
     assert next(iter(entry.subentries.values())).data["notify_target"] == ""
@@ -215,6 +216,7 @@ async def test_legacy_borrowed_entry_is_adopted_by_reauth(
     assert entry.data[CONF_AUTH_IMPLEMENTATION] == "cred"
     assert entry.data["token"]["access_token"] == "mock-access-token"
     assert entry.unique_id == "google:me@example.com"
+    assert entry.title == "Google Calendar (me@example.com)"
     assert len(entry.subentries) == 1
 
 
