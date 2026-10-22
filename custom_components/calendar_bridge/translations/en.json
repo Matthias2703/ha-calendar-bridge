@@ -104,7 +104,12 @@
       "no_url_available": "No URL is available. For information about this error, see the Home Assistant documentation.",
       "oauth_implementation_unavailable": "The Google OAuth client is unavailable. Check your Application Credentials.",
       "missing_configuration": "The Google OAuth client is not configured.",
-      "user_rejected_authorize": "Google sign-in was cancelled."
+      "user_rejected_authorize": "Google sign-in was cancelled.",
+      "code_expired": "The code expired before it was entered. Please start again.",
+      "access_denied": "The Google sign-in was rejected."
+    },
+    "progress": {
+      "wait_for_code": "To link your Google account, open [{url}]({url}) and enter this code:\n\n**{user_code}**\n\nThis window continues on its own once you approved the sign-in."
     }
   },
   "config_subentries": {
@@ -377,6 +382,6 @@
     }
   },
   "application_credentials": {
-    "description": "Calendar Bridge signs in to Google with your own OAuth client.\n\n1. Open the [OAuth consent screen]({oauth_consent_url}) and configure it.\n2. Create an OAuth client ID of type **Web application** under [Credentials]({oauth_creds_url}), and add your Home Assistant redirect URL.\n3. Enable the Google Calendar API for the project.\n4. Enter the Client ID and Client Secret here.\n\nSee [the setup guide]({more_info_url}) for details."
+    "description": "Calendar Bridge signs in to Google with your own OAuth client.\n\n1. Open the [OAuth consent screen]({oauth_consent_url}) and configure it.\n2. Enable the Google Calendar API for the project.\n3. Under [Credentials]({oauth_creds_url}) create an OAuth client ID. The type **TV and Limited Input devices** shows a short code to enter at google.com/device; the type **Web application** also works if you add `https://my.home-assistant.io/redirect/oauth` as authorized redirect URI.\n4. Enter the Client ID and Client Secret here.\n\nSee [the setup guide]({more_info_url}) for details."
   }
 }

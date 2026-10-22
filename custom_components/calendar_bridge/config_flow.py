@@ -8,11 +8,13 @@ entry and nothing is borrowed from another integration.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import Mapping
 from typing import Any
 
 import voluptuous as vol
+from aiohttp import ClientError
 from caldav.collection import Calendar
 from gcal_sync.exceptions import ApiException
 from gcal_sync.model import Calendar as GoogleCalendar
@@ -27,7 +29,9 @@ from homeassistant.config_entries import (
 from homeassistant.const import CONF_PASSWORD, CONF_URL, CONF_USERNAME, CONF_VERIFY_SSL
 from homeassistant.core import callback
 from homeassistant.helpers import config_entry_oauth2_flow, selector
+from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
+from .application_credentials import DEVICE_TOKEN
 from .caldav_target import CalDavAuthError, CalDavConnectionError, build_client, discover_calendars
 from .const import (
     CONF_AUTH_IMPLEMENTATION,
@@ -55,6 +59,15 @@ from .const import (
     is_google_entry_data,
 )
 from .device import async_clear_other_defaults
+from .device_auth import (
+    DeviceAuthDenied,
+    DeviceAuthError,
+    DeviceAuthExpired,
+    DeviceAuthUnsupported,
+    DeviceCode,
+    async_poll_for_token,
+    async_request_device_code,
+)
 from .google_target import (
     GoogleAccountNotFoundError,
     GoogleAuthError,
@@ -168,6 +181,13 @@ class CalendarBridgeConfigFlow(config_entry_oauth2_flow.AbstractOAuth2FlowHandle
         self._last_test_error: str | None = None
         self._oauth_data: dict[str, Any] = {}
         self._google_calendars: list[GoogleCalendar] = []
+        # Google's device flow ("enter this code") is tried first, like the
+        # core Google Calendar integration; a client Google refuses it for
+        # falls back to the browser redirect flow.
+        self._web_auth = False
+        self._device_code: DeviceCode | None = None
+        self._device_task: asyncio.Task[dict[str, Any]] | None = None
+        self._device_error = "oauth_failed"
 
     @property
     def logger(self) -> logging.Logger:
@@ -198,6 +218,67 @@ class CalendarBridgeConfigFlow(config_entry_oauth2_flow.AbstractOAuth2FlowHandle
     async def async_step_google(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         """Start Calendar Bridge's own Google sign-in."""
         return await self.async_step_pick_implementation()
+
+    async def async_step_auth(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
+        """Sign in with a code shown here; fall back to the redirect flow if refused."""
+        if self._web_auth:
+            return await super().async_step_auth(user_input)
+
+        session = async_get_clientsession(self.hass)
+        client_id = self.flow_impl.client_id  # type: ignore[attr-defined]
+        client_secret = self.flow_impl.client_secret  # type: ignore[attr-defined]
+        if self._device_code is None:
+            try:
+                self._device_code = await async_request_device_code(
+                    session, client_id, _GOOGLE_CALENDAR_SCOPE
+                )
+            except DeviceAuthUnsupported:
+                _LOGGER.debug("Device flow not supported for this client, using web flow")
+                self._web_auth = True
+                return await super().async_step_auth(user_input)
+            except DeviceAuthError, ClientError, TimeoutError:
+                return self.async_abort(reason="cannot_connect")
+            self._device_task = self.hass.async_create_task(
+                async_poll_for_token(session, client_id, client_secret, self._device_code)
+            )
+
+        task = self._device_task
+        assert task is not None
+        if not task.done():
+            return self.async_show_progress(
+                step_id="auth",
+                progress_action="wait_for_code",
+                description_placeholders={
+                    "url": self._device_code.verification_url,
+                    "user_code": self._device_code.user_code,
+                },
+                progress_task=task,
+            )
+
+        try:
+            token = task.result()
+        except DeviceAuthExpired:
+            self._device_error = "code_expired"
+        except DeviceAuthDenied:
+            self._device_error = "access_denied"
+        except DeviceAuthError, ClientError, TimeoutError:
+            self._device_error = "oauth_failed"
+        else:
+            self.external_data = {DEVICE_TOKEN: token}
+            return self.async_show_progress_done(next_step_id="creation")
+        return self.async_show_progress_done(next_step_id="device_failed")
+
+    async def async_step_device_failed(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """The device sign-in didn't complete."""
+        return self.async_abort(reason=self._device_error)
+
+    @callback
+    def async_remove(self) -> None:
+        """Stop waiting for a code nobody will enter."""
+        if self._device_task is not None and not self._device_task.done():
+            self._device_task.cancel()
 
     async def async_oauth_create_entry(self, data: dict[str, Any]) -> ConfigFlowResult:
         """Google sign-in finished: identify the account, then pick calendars (or finish reauth)."""

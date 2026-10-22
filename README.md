@@ -25,9 +25,9 @@ Calendar Bridge talks directly to the Google Calendar REST API and to CalDAV (vi
 
 Calendar Bridge owns its Google sign-in; it does not read or refresh the token of Home Assistant's core Google Calendar integration, so the two work independently.
 
-1. In the [Google Cloud console](https://console.cloud.google.com/apis/credentials), create (or reuse) a project, enable the **Google Calendar API**, configure the [OAuth consent screen](https://console.cloud.google.com/apis/credentials/consent), and create an OAuth client ID of type **Web application**. Add your Home Assistant URL's `/auth/external/callback` (or `https://my.home-assistant.io/redirect/oauth` with My Home Assistant) as an authorized redirect URI.
+1. In the [Google Cloud console](https://console.cloud.google.com/apis/credentials), create (or reuse) a project, enable the **Google Calendar API**, configure the [OAuth consent screen](https://console.cloud.google.com/apis/credentials/consent), and create an OAuth client ID of type **TV and Limited Input devices** (or **Web application** with the authorized redirect URI `https://my.home-assistant.io/redirect/oauth`).
 2. In Home Assistant, open Settings → Devices & Services → ⋮ → Application Credentials → Add, choose **Calendar Bridge**, and enter the Client ID and Client Secret.
-3. Add the integration, choose **Add a Google Calendar account**, and sign in with Google.
+3. Add the integration, choose **Add a Google Calendar account**. Home Assistant shows a short code: open `google.com/device`, enter it, and approve. (A Web client signs in through a browser redirect instead.)
 
 **Upgrading from an earlier version that borrowed the core Google sign-in:** after the update, Home Assistant asks you to reauthenticate the Google account once. Add the Application Credentials above, then follow the prompt; your calendars and settings are kept.
 

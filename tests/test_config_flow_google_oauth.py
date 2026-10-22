@@ -5,6 +5,7 @@ Nothing is read from, or refreshed through, another integration's config entry.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -32,8 +33,15 @@ from custom_components.calendar_bridge.const import (
     CONF_GOOGLE_ENTRY_ID,
     DOMAIN,
 )
+from custom_components.calendar_bridge.device_auth import (
+    DeviceAuthExpired,
+    DeviceAuthUnsupported,
+    DeviceCode,
+)
 
 _REDIRECT = "https://example.com/auth/external/callback"
+_REQUEST = "custom_components.calendar_bridge.config_flow.async_request_device_code"
+_POLL = "custom_components.calendar_bridge.config_flow.async_poll_for_token"
 _LIST = "custom_components.calendar_bridge.config_flow.async_list_writable_calendars_with_token"
 
 
@@ -42,6 +50,13 @@ def _calendars() -> list[SimpleNamespace]:
         SimpleNamespace(id="me@example.com", summary="Me", primary=True),
         SimpleNamespace(id="family@group.calendar.google.com", summary="Family", primary=None),
     ]
+
+
+@pytest.fixture(autouse=True)
+def _web_client() -> Iterator[None]:
+    """Most tests here cover the browser redirect flow: Google refuses the device flow."""
+    with patch(_REQUEST, side_effect=DeviceAuthUnsupported("invalid_client")):
+        yield
 
 
 @pytest.fixture
@@ -244,3 +259,84 @@ async def test_legacy_entry_without_a_token_starts_reauth_on_setup(
     assert any(
         flow["context"]["source"] == "reauth" for flow in hass.config_entries.flow.async_progress()
     )
+
+
+_CODE = DeviceCode(
+    device_code="dev-code",
+    user_code="ABCD-EFGH",
+    verification_url="https://www.google.com/device",
+    expires_in=1800,
+    interval=0,
+)
+_TOKEN = {
+    "access_token": "device-access-token",
+    "refresh_token": "device-refresh-token",
+    "expires_in": 3600,
+    "token_type": "Bearer",
+    "scope": "https://www.googleapis.com/auth/calendar",
+}
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("current_request_with_host", "credentials")
+async def test_device_flow_shows_a_code_and_stores_the_token(
+    hass: HomeAssistant, enable_custom_integrations: None
+) -> None:
+    """Like the core Google integration: show a code, no redirect URL involved."""
+    result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": "user"})
+
+    with (
+        patch(_REQUEST, return_value=_CODE),
+        patch(_POLL, return_value=_TOKEN),
+        patch(_LIST, return_value=_calendars()),
+    ):
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"], {"next_step_id": "google"}
+        )
+        assert result["type"] is FlowResultType.SHOW_PROGRESS
+        assert result["description_placeholders"]["user_code"] == "ABCD-EFGH"
+        assert result["description_placeholders"]["url"] == "https://www.google.com/device"
+
+        await hass.async_block_till_done()
+        result = await hass.config_entries.flow.async_configure(result["flow_id"])
+        assert result["type"] is FlowResultType.FORM
+        assert result["step_id"] == "google_calendar"
+
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"],
+            {
+                CONF_CALENDAR_URL: ["me@example.com"],
+                "default_reminder_minutes": 15,
+                "default_reminder_method": "popup",
+                "default_target": False,
+                "backfill_external_events": False,
+                "notify_enabled": False,
+                "notify_minutes_before": 15,
+                "notify_message_template": "",
+            },
+        )
+
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert result["data"]["token"]["access_token"] == "device-access-token"
+    assert result["data"]["token"]["refresh_token"] == "device-refresh-token"
+    assert result["data"][CONF_AUTH_IMPLEMENTATION] == "cred"
+    assert result["result"].unique_id == "google:me@example.com"
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("current_request_with_host", "credentials")
+async def test_device_flow_aborts_when_the_code_expires(
+    hass: HomeAssistant, enable_custom_integrations: None
+) -> None:
+    result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": "user"})
+
+    with patch(_REQUEST, return_value=_CODE), patch(_POLL, side_effect=DeviceAuthExpired):
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"], {"next_step_id": "google"}
+        )
+        assert result["type"] is FlowResultType.SHOW_PROGRESS
+        await hass.async_block_till_done()
+        result = await hass.config_entries.flow.async_configure(result["flow_id"])
+
+    assert result["type"] is FlowResultType.ABORT
+    assert result["reason"] == "code_expired"

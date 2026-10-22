@@ -104,7 +104,12 @@
       "no_url_available": "Keine URL verfügbar. Informationen zu diesem Fehler stehen in der Home-Assistant-Dokumentation.",
       "oauth_implementation_unavailable": "Der Google-OAuth-Client ist nicht verfügbar. Prüfe die Anmeldedaten für Anwendungen.",
       "missing_configuration": "Der Google-OAuth-Client ist nicht konfiguriert.",
-      "user_rejected_authorize": "Die Google-Anmeldung wurde abgebrochen."
+      "user_rejected_authorize": "Die Google-Anmeldung wurde abgebrochen.",
+      "code_expired": "Der Code ist abgelaufen, bevor er eingegeben wurde. Bitte starte erneut.",
+      "access_denied": "Die Google-Anmeldung wurde abgelehnt."
+    },
+    "progress": {
+      "wait_for_code": "Um dein Google-Konto zu verknüpfen, öffne [{url}]({url}) und gib diesen Code ein:\n\n**{user_code}**\n\nDieses Fenster geht von selbst weiter, sobald du die Anmeldung bestätigt hast."
     }
   },
   "config_subentries": {
@@ -377,6 +382,6 @@
     }
   },
   "application_credentials": {
-    "description": "Calendar Bridge meldet sich mit deinem eigenen OAuth-Client bei Google an.\n\n1. Öffne den [OAuth-Zustimmungsbildschirm]({oauth_consent_url}) und richte ihn ein.\n2. Erstelle unter [Anmeldedaten]({oauth_creds_url}) eine OAuth-Client-ID vom Typ **Webanwendung** und trage die Weiterleitungs-URL deines Home Assistant ein.\n3. Aktiviere die Google Calendar API für das Projekt.\n4. Trage Client-ID und Client-Secret hier ein.\n\nDetails stehen in der [Anleitung]({more_info_url})."
+    "description": "Calendar Bridge meldet sich mit deinem eigenen OAuth-Client bei Google an.\n\n1. Öffne den [OAuth-Zustimmungsbildschirm]({oauth_consent_url}) und richte ihn ein.\n2. Aktiviere die Google Calendar API für das Projekt.\n3. Erstelle unter [Anmeldedaten]({oauth_creds_url}) eine OAuth-Client-ID. Der Typ **TV und Geräte mit eingeschränkter Eingabe** zeigt einen kurzen Code, den du unter google.com/device eingibst; der Typ **Webanwendung** funktioniert auch, wenn du `https://my.home-assistant.io/redirect/oauth` als Weiterleitungs-URL einträgst.\n4. Trage Client-ID und Client-Secret hier ein.\n\nDetails stehen in der [Anleitung]({more_info_url})."
   }
 }
