@@ -42,7 +42,7 @@
           "notify_enabled": "Plant eine eigenständige Home-Assistant-Benachrichtigung für jeden auf diesem Kalender erkannten Termin, unabhängig davon, wie er angelegt wurde -- zusätzlich zur oder anstelle der obigen Erinnerung.",
           "notify_target": "Eine Notify-Entität (z. B. dein Handy), an die die Benachrichtigung gesendet wird. Erforderlich, damit die Benachrichtigung tatsächlich ausgelöst wird.",
           "notify_minutes_before": "Wie viele Minuten vor Terminbeginn die Home-Assistant-Benachrichtigung gesendet wird.",
-          "notify_message_template": "Unterstützt '{summary}' und '{start}' als Platzhalter. Leer lassen für die Standardnachricht (Reminder: '{summary}')."
+          "notify_message_template": "Unterstützt die Platzhalter summary und start, jeweils in geschweiften Klammern. Leer lassen für die Standardnachricht (Reminder: summary)."
         }
       },
       "google_calendar": {
@@ -68,7 +68,7 @@
           "notify_enabled": "Plant eine eigenständige Home-Assistant-Benachrichtigung für jeden auf diesem Kalender erkannten Termin, unabhängig davon, wie er angelegt wurde -- zusätzlich zur oder anstelle der obigen Erinnerung.",
           "notify_target": "Eine Notify-Entität (z. B. dein Handy), an die die Benachrichtigung gesendet wird. Erforderlich, damit die Benachrichtigung tatsächlich ausgelöst wird.",
           "notify_minutes_before": "Wie viele Minuten vor Terminbeginn die Home-Assistant-Benachrichtigung gesendet wird.",
-          "notify_message_template": "Unterstützt '{summary}' und '{start}' als Platzhalter. Leer lassen für die Standardnachricht (Reminder: '{summary}')."
+          "notify_message_template": "Unterstützt die Platzhalter summary und start, jeweils in geschweiften Klammern. Leer lassen für die Standardnachricht (Reminder: summary)."
         }
       },
       "reauth_confirm": {
@@ -137,7 +137,7 @@
             "notify_enabled": "Plant eine eigenständige Home-Assistant-Benachrichtigung für jeden auf diesem Kalender erkannten Termin, unabhängig davon, wie er angelegt wurde -- zusätzlich zur oder anstelle der obigen Erinnerung.",
             "notify_target": "Eine Notify-Entität (z. B. dein Handy), an die die Benachrichtigung gesendet wird. Erforderlich, damit die Benachrichtigung tatsächlich ausgelöst wird.",
             "notify_minutes_before": "Wie viele Minuten vor Terminbeginn die Home-Assistant-Benachrichtigung gesendet wird.",
-            "notify_message_template": "Unterstützt '{summary}' und '{start}' als Platzhalter. Leer lassen für die Standardnachricht (Reminder: '{summary}')."
+            "notify_message_template": "Unterstützt die Platzhalter summary und start, jeweils in geschweiften Klammern. Leer lassen für die Standardnachricht (Reminder: summary)."
           }
         },
         "reconfigure": {
@@ -160,7 +160,7 @@
             "notify_enabled": "Plant eine eigenständige Home-Assistant-Benachrichtigung für jeden auf diesem Kalender erkannten Termin, unabhängig davon, wie er angelegt wurde -- zusätzlich zur oder anstelle der obigen Erinnerung.",
             "notify_target": "Eine Notify-Entität (z. B. dein Handy), an die die Benachrichtigung gesendet wird. Erforderlich, damit die Benachrichtigung tatsächlich ausgelöst wird.",
             "notify_minutes_before": "Wie viele Minuten vor Terminbeginn die Home-Assistant-Benachrichtigung gesendet wird.",
-            "notify_message_template": "Unterstützt '{summary}' und '{start}' als Platzhalter. Leer lassen für die Standardnachricht (Reminder: '{summary}')."
+            "notify_message_template": "Unterstützt die Platzhalter summary und start, jeweils in geschweiften Klammern. Leer lassen für die Standardnachricht (Reminder: summary)."
           }
         }
       },

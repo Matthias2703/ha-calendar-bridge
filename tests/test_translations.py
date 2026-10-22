@@ -24,18 +24,17 @@ def _walk(node: object, path: str = ""):
 
 
 @pytest.mark.parametrize("file", _FILES, ids=lambda f: f.name)
-def test_notify_message_template_text_has_no_unquoted_placeholders(file: Path) -> None:
-    """`{summary}` is a template placeholder for the user, not a translation variable.
+def test_notify_message_template_text_has_no_braces(file: Path) -> None:
+    """A literal `{summary}` makes the frontend raise MISSING_VALUE (issues 26 and 28).
 
-    Unquoted, the frontend raises MISSING_VALUE (issues 26 and 28); ICU needs it
-    in apostrophes.
+    hassfest also forbids quoting it, so the help text names the placeholders
+    in words instead.
     """
     texts = [
-        t
-        for p, t in _walk(json.loads(file.read_text("utf-8")))
-        if p.endswith("notify_message_template")
+        text
+        for path, text in _walk(json.loads(file.read_text("utf-8")))
+        if path.endswith("data_description.notify_message_template")
     ]
     assert texts
     for text in texts:
-        assert "'{summary}'" in text and "'{start}'" in text
-        assert "{summary}/" not in text
+        assert "{" not in text and "}" not in text

@@ -264,7 +264,8 @@ async def test_f3_editing_a_calendar_without_the_key_defaults_to_false_and_can_b
     assert _schema_default(result["data_schema"], CONF_BACKFILL_EXTERNAL_EVENTS) is False
 
     result = await hass.config_entries.subentries.async_configure(
-        result["flow_id"], {CONF_BACKFILL_EXTERNAL_EVENTS: True}
+        result["flow_id"],
+        {CONF_BACKFILL_EXTERNAL_EVENTS: True, CONF_NOTIFY_TARGET: "notify.phone"},
     )
     assert result["type"] is FlowResultType.ABORT
 

@@ -42,7 +42,7 @@
           "notify_enabled": "Schedules an independent Home Assistant notification for every event detected on this calendar, however it was created -- on top of, or instead of, the reminder above.",
           "notify_target": "A notify entity (e.g. your phone) to send the notification to. Required for the notification to actually fire.",
           "notify_minutes_before": "How many minutes before the event start the Home Assistant notification is sent.",
-          "notify_message_template": "Supports '{summary}' and '{start}' as placeholders. Leave blank for the default message (Reminder: '{summary}')."
+          "notify_message_template": "Supports the placeholders summary and start, each written in curly braces. Leave blank for the default message (Reminder: summary)."
         }
       },
       "google_calendar": {
@@ -68,7 +68,7 @@
           "notify_enabled": "Schedules an independent Home Assistant notification for every event detected on this calendar, however it was created -- on top of, or instead of, the reminder above.",
           "notify_target": "A notify entity (e.g. your phone) to send the notification to. Required for the notification to actually fire.",
           "notify_minutes_before": "How many minutes before the event start the Home Assistant notification is sent.",
-          "notify_message_template": "Supports '{summary}' and '{start}' as placeholders. Leave blank for the default message (Reminder: '{summary}')."
+          "notify_message_template": "Supports the placeholders summary and start, each written in curly braces. Leave blank for the default message (Reminder: summary)."
         }
       },
       "reauth_confirm": {
@@ -137,7 +137,7 @@
             "notify_enabled": "Schedules an independent Home Assistant notification for every event detected on this calendar, however it was created -- on top of, or instead of, the reminder above.",
             "notify_target": "A notify entity (e.g. your phone) to send the notification to. Required for the notification to actually fire.",
             "notify_minutes_before": "How many minutes before the event start the Home Assistant notification is sent.",
-            "notify_message_template": "Supports '{summary}' and '{start}' as placeholders. Leave blank for the default message (Reminder: '{summary}')."
+            "notify_message_template": "Supports the placeholders summary and start, each written in curly braces. Leave blank for the default message (Reminder: summary)."
           }
         },
         "reconfigure": {
@@ -160,7 +160,7 @@
             "notify_enabled": "Schedules an independent Home Assistant notification for every event detected on this calendar, however it was created -- on top of, or instead of, the reminder above.",
             "notify_target": "A notify entity (e.g. your phone) to send the notification to. Required for the notification to actually fire.",
             "notify_minutes_before": "How many minutes before the event start the Home Assistant notification is sent.",
-            "notify_message_template": "Supports '{summary}' and '{start}' as placeholders. Leave blank for the default message (Reminder: '{summary}')."
+            "notify_message_template": "Supports the placeholders summary and start, each written in curly braces. Leave blank for the default message (Reminder: summary)."
           }
         }
       },
