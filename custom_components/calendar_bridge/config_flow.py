@@ -120,8 +120,12 @@ def _reminder_defaults_schema(
         vol.Optional(
             CONF_NOTIFY_ENABLED, default=defaults.get(CONF_NOTIFY_ENABLED, DEFAULT_NOTIFY_ENABLED)
         ): selector.BooleanSelector(),
+        # No `default`: an empty string isn't a valid entity id, so a default
+        # of "" would make the form reject an untouched field. The stored
+        # value (if any) is pre-filled through `suggested_value` instead.
         vol.Optional(
-            CONF_NOTIFY_TARGET, default=defaults.get(CONF_NOTIFY_TARGET, "")
+            CONF_NOTIFY_TARGET,
+            description={"suggested_value": defaults.get(CONF_NOTIFY_TARGET) or None},
         ): selector.EntitySelector(selector.EntitySelectorConfig(domain="notify")),
         vol.Optional(
             CONF_NOTIFY_MINUTES_BEFORE,
@@ -327,7 +331,7 @@ class CalendarBridgeConfigFlow(config_entry_oauth2_flow.AbstractOAuth2FlowHandle
                         # it as the default -- only the first one keeps it.
                         CONF_DEFAULT_TARGET: user_input[CONF_DEFAULT_TARGET] and index == 0,
                         CONF_NOTIFY_ENABLED: user_input[CONF_NOTIFY_ENABLED],
-                        CONF_NOTIFY_TARGET: user_input[CONF_NOTIFY_TARGET],
+                        CONF_NOTIFY_TARGET: user_input.get(CONF_NOTIFY_TARGET, ""),
                         CONF_NOTIFY_MINUTES_BEFORE: user_input[CONF_NOTIFY_MINUTES_BEFORE],
                         CONF_NOTIFY_MESSAGE_TEMPLATE: user_input[CONF_NOTIFY_MESSAGE_TEMPLATE],
                     },
@@ -383,7 +387,7 @@ class CalendarBridgeConfigFlow(config_entry_oauth2_flow.AbstractOAuth2FlowHandle
                         # it as the default -- only the first one keeps it.
                         CONF_DEFAULT_TARGET: user_input[CONF_DEFAULT_TARGET] and index == 0,
                         CONF_NOTIFY_ENABLED: user_input[CONF_NOTIFY_ENABLED],
-                        CONF_NOTIFY_TARGET: user_input[CONF_NOTIFY_TARGET],
+                        CONF_NOTIFY_TARGET: user_input.get(CONF_NOTIFY_TARGET, ""),
                         CONF_NOTIFY_MINUTES_BEFORE: user_input[CONF_NOTIFY_MINUTES_BEFORE],
                         CONF_NOTIFY_MESSAGE_TEMPLATE: user_input[CONF_NOTIFY_MESSAGE_TEMPLATE],
                     },
@@ -491,7 +495,7 @@ class CalendarSubentryFlow(ConfigSubentryFlow):
                     CONF_BACKFILL_EXTERNAL_EVENTS: user_input[CONF_BACKFILL_EXTERNAL_EVENTS],
                     CONF_DEFAULT_TARGET: user_input[CONF_DEFAULT_TARGET],
                     CONF_NOTIFY_ENABLED: user_input[CONF_NOTIFY_ENABLED],
-                    CONF_NOTIFY_TARGET: user_input[CONF_NOTIFY_TARGET],
+                    CONF_NOTIFY_TARGET: user_input.get(CONF_NOTIFY_TARGET, ""),
                     CONF_NOTIFY_MINUTES_BEFORE: user_input[CONF_NOTIFY_MINUTES_BEFORE],
                     CONF_NOTIFY_MESSAGE_TEMPLATE: user_input[CONF_NOTIFY_MESSAGE_TEMPLATE],
                 },
@@ -539,7 +543,7 @@ class CalendarSubentryFlow(ConfigSubentryFlow):
             return self.async_update_and_abort(
                 entry,
                 subentry,
-                data={**subentry.data, **user_input},
+                data={**subentry.data, CONF_NOTIFY_TARGET: "", **user_input},
             )
 
         schema = vol.Schema(

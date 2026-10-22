@@ -142,7 +142,6 @@ async def test_google_sign_in_stores_the_token_in_its_own_entry(
                 "default_target": False,
                 "backfill_external_events": False,
                 "notify_enabled": False,
-                "notify_target": "notify.phone",
                 "notify_minutes_before": 15,
                 "notify_message_template": "",
             },
@@ -156,6 +155,8 @@ async def test_google_sign_in_stores_the_token_in_its_own_entry(
     entry = result["result"]
     assert entry.unique_id == "google:me@example.com"
     assert [sub.unique_id for sub in entry.subentries.values()] == ["me@example.com"]
+    # an untouched "Notification target" must be accepted and stored empty
+    assert next(iter(entry.subentries.values())).data["notify_target"] == ""
 
 
 @pytest.mark.asyncio
