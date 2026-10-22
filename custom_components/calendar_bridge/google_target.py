@@ -378,6 +378,9 @@ def _update_body(updates: EventUpdate, current: GoogleEvent | None) -> dict[str,
 class GoogleCalendarTarget:
     """Creates and backfills events on a Google Calendar via `gcal_sync`."""
 
+    # The account's address (its primary calendar), learned by async_test_connection.
+    account_id: str | None = None
+
     def __init__(self, hass: HomeAssistant, entry_id: str) -> None:
         """Set up the target.
 
@@ -398,7 +401,8 @@ class GoogleCalendarTarget:
 
         `GoogleAuthError` (an `ApiException`) means the stored sign-in was rejected.
         """
-        await async_list_writable_calendars(self._hass, self._entry_id)
+        calendars = await async_list_writable_calendars(self._hass, self._entry_id)
+        self.account_id = next((c.id for c in calendars if getattr(c, "primary", None)), None)
 
     async def async_calendar_still_exists(self, calendar_ref: str) -> bool | None:
         """True/False if calendar_ref is still among the account's writable calendars.

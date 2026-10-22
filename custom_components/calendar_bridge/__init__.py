@@ -69,6 +69,8 @@ from .target import SeenEvent, render_notify_message
 
 _LOGGER = logging.getLogger(__name__)
 
+_GOOGLE_DEFAULT_TITLE = "Google Calendar"
+
 # How long to wait after a calendar.create_event *service* call before
 # searching for the event it wrote -- the write happens after
 # EVENT_CALL_SERVICE fires, so there's no way to know exactly when it lands
@@ -536,6 +538,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: CalendarBridgeConfigEntr
         raise ConfigEntryAuthFailed("Google rejected the stored sign-in") from err
     except (CalDavConnectionError, GoogleAccountNotFoundError, ApiException) as err:
         raise ConfigEntryNotReady("Could not reach the calendar account") from err
+
+    # An entry created before accounts were named by their address still
+    # reads just "Google Calendar" -- indistinguishable from a second account.
+    account_id = getattr(target, "account_id", None)
+    if account_id and entry.title == _GOOGLE_DEFAULT_TITLE:
+        hass.config_entries.async_update_entry(
+            entry, title=f"{_GOOGLE_DEFAULT_TITLE} ({account_id})"
+        )
 
     entry.runtime_data = target
 
