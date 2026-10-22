@@ -5,7 +5,10 @@ from __future__ import annotations
 import pytest
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
-from pytest_homeassistant_custom_component.test_util.aiohttp import AiohttpClientMocker
+from pytest_homeassistant_custom_component.test_util.aiohttp import (
+    AiohttpClientMocker,
+    AiohttpClientMockResponse,
+)
 
 from custom_components.calendar_bridge.device_auth import (
     DEVICE_CODE_URL,
@@ -67,12 +70,24 @@ async def test_request_with_an_unexpected_body_fails(
 async def test_poll_waits_through_pending_then_returns_the_token(
     hass: HomeAssistant, aioclient_mock: AiohttpClientMocker
 ) -> None:
-    aioclient_mock.post(TOKEN_URL, status=428, json={"error": "authorization_pending"})
-    aioclient_mock.post(TOKEN_URL, json={"access_token": "a", "refresh_token": "r"})
+    answers = iter(
+        [
+            AiohttpClientMockResponse(
+                "POST", TOKEN_URL, status=428, json={"error": "authorization_pending"}
+            ),
+            AiohttpClientMockResponse(
+                "POST", TOKEN_URL, json={"access_token": "a", "refresh_token": "r"}
+            ),
+        ]
+    )
+    # the mocker always answers with the first matching registration, so hand
+    # out one response per call instead
+    aioclient_mock.post(TOKEN_URL, side_effect=lambda *_args: next(answers))
 
     token = await async_poll_for_token(async_get_clientsession(hass), "id", "secret", _CODE)
 
     assert token == {"access_token": "a", "refresh_token": "r"}
+    assert len(aioclient_mock.mock_calls) == 2
     assert aioclient_mock.mock_calls[0][2]["grant_type"].endswith("device_code")
     assert aioclient_mock.mock_calls[0][2]["device_code"] == "dev"
 

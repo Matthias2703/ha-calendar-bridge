@@ -28,7 +28,7 @@ DEVICE_TOKEN = "device_token"
 class CalendarBridgeAuth(AuthImplementation):
     """Web (redirect) flow by default; also accepts a token from the device flow."""
 
-    async def async_resolve_external_data(self, external_data: Any) -> dict:
+    async def async_resolve_external_data(self, external_data: Any) -> dict[str, Any]:
         """Return the device-flow token as is, else exchange the web flow's code."""
         if isinstance(external_data, dict) and DEVICE_TOKEN in external_data:
             return dict(external_data[DEVICE_TOKEN])
@@ -58,4 +58,5 @@ async def async_get_description_placeholders(hass: HomeAssistant) -> dict[str, s
         "oauth_consent_url": "https://console.cloud.google.com/apis/credentials/consent",
         "more_info_url": "https://github.com/Matthias2703/ha-calendar-bridge#google-calendar-setup",
         "oauth_creds_url": "https://console.cloud.google.com/apis/credentials",
+        "redirect_url": "https://my.home-assistant.io/redirect/oauth",
     }

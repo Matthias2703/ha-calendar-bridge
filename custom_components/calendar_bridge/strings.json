@@ -382,6 +382,6 @@
     }
   },
   "application_credentials": {
-    "description": "Calendar Bridge signs in to Google with your own OAuth client.\n\n1. Open the [OAuth consent screen]({oauth_consent_url}) and configure it.\n2. Enable the Google Calendar API for the project.\n3. Under [Credentials]({oauth_creds_url}) create an OAuth client ID. The type **TV and Limited Input devices** shows a short code to enter at google.com/device; the type **Web application** also works if you add `https://my.home-assistant.io/redirect/oauth` as authorized redirect URI.\n4. Enter the Client ID and Client Secret here.\n\nSee [the setup guide]({more_info_url}) for details."
+    "description": "Calendar Bridge signs in to Google with your own OAuth client.\n\n1. Open the [OAuth consent screen]({oauth_consent_url}) and configure it.\n2. Enable the Google Calendar API for the project.\n3. Under [Credentials]({oauth_creds_url}) create an OAuth client ID. The type **TV and Limited Input devices** shows a short code to enter at google.com/device; the type **Web application** also works if you add `{redirect_url}` as authorized redirect URI.\n4. Enter the Client ID and Client Secret here.\n\nSee [the setup guide]({more_info_url}) for details."
   }
 }
