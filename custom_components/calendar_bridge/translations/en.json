@@ -300,7 +300,7 @@
         },
         "notify": {
           "name": "Notification reminder",
-          "description": "Also send a Home Assistant notification before the event, independent of the calendar's own reminder. Needs a notify target and minutes_before; message is optional and supports {summary}/{start} placeholders (default: 'Reminder: {summary}')."
+          "description": "Also send a Home Assistant notification before the event, independent of the calendar's own reminder. Needs a notify target and minutes_before; message is optional and supports the placeholders summary and start, each written in curly braces (default: 'Reminder: summary')."
         }
       }
     },

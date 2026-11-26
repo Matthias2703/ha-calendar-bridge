@@ -300,7 +300,7 @@
         },
         "notify": {
           "name": "Benachrichtigungs-Erinnerung",
-          "description": "Zusätzlich eine Home-Assistant-Benachrichtigung vor dem Termin senden, unabhängig von der Kalender-eigenen Erinnerung. Braucht ein Notify-Ziel und minutes_before; message ist optional und unterstützt die Platzhalter {summary}/{start} (Standard: 'Reminder: {summary}')."
+          "description": "Zusätzlich eine Home-Assistant-Benachrichtigung vor dem Termin senden, unabhängig von der Kalender-eigenen Erinnerung. Braucht ein Notify-Ziel und minutes_before; message ist optional und unterstützt die Platzhalter summary und start, jeweils in geschweiften Klammern (Standard: 'Reminder: summary')."
         }
       }
     },
