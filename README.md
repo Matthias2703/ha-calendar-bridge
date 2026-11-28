@@ -3,7 +3,7 @@
 [![Validate](https://github.com/Matthias2703/ha-calendar-bridge/actions/workflows/validate.yml/badge.svg)](https://github.com/Matthias2703/ha-calendar-bridge/actions/workflows/validate.yml)
 [![Lint](https://github.com/Matthias2703/ha-calendar-bridge/actions/workflows/lint.yml/badge.svg)](https://github.com/Matthias2703/ha-calendar-bridge/actions/workflows/lint.yml)
 [![Test](https://github.com/Matthias2703/ha-calendar-bridge/actions/workflows/test.yml/badge.svg)](https://github.com/Matthias2703/ha-calendar-bridge/actions/workflows/test.yml)
-[![hacs_badge](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://github.com/hacs/integration)
+[![hacs_badge](https://img.shields.io/badge/HACS-Default-41BDF5.svg)](https://github.com/hacs/integration)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 ![The two Lovelace "Create event" cards -- compact phone layout on the left, two-column tablet layout on the right](docs/lovelace-cards.svg)
@@ -49,15 +49,15 @@ Calendar Bridge owns its Google sign-in; it does not read or refresh the token o
 
 Requires **Home Assistant 2026.3.0 or newer**.
 
-This integration isn't (yet) in the default HACS store -- it can be installed as a *custom repository* instead, which is fully supported by HACS and doesn't need the default-store listing to work.
+### Via HACS
 
-### Via HACS (custom repository)
+Calendar Bridge is part of the default HACS store.
+
+[![Open your Home Assistant instance and open the Calendar Bridge repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=Matthias2703&repository=ha-calendar-bridge&category=integration)
 
 1. Open **HACS** in Home Assistant.
-2. Click the **⋮** menu (top right) → **Custom repositories**.
-3. Add `https://github.com/Matthias2703/ha-calendar-bridge`, category **Integration**, then **Add**.
-4. Search for **Calendar Bridge** in HACS, open it, and click **Download**.
-5. Restart Home Assistant.
+2. Search for **Calendar Bridge**, open it, and click **Download**.
+3. Restart Home Assistant.
 
 ### Manually (without HACS)
 
@@ -65,7 +65,7 @@ This integration isn't (yet) in the default HACS store -- it can be installed as
 2. Copy the `custom_components/calendar_bridge` folder into your Home Assistant config's `custom_components` folder (creating that folder first if it doesn't exist yet), so you end up with `config/custom_components/calendar_bridge/...`.
 3. Restart Home Assistant.
 
-Either way, updates aren't automatic once installed as a custom repository -- HACS will show an update notification for new releases the same as it does for store integrations; a manual install needs repeating the copy step by hand.
+HACS shows an update notification for each new release; a manual install needs repeating the copy step by hand.
 
 ## Configuration
 
